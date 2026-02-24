@@ -245,9 +245,9 @@ if st.session_state.local_files:
                     st.caption(f"Jumlah Kelas Kata dominan pada dokumen **{active_file}**")
                     if not df_pos.empty:
                         chart_pos = alt.Chart(df_pos).mark_bar(color="#0284C7", cornerRadiusEnd=4).encode(
-                            y=alt.Y('POS Tag', sort='-x', title='Kelas Kata', 
+                            y=alt.Y('POS Tag:N', sort='-x', title='Kelas Kata', 
                                     axis=alt.Axis(labelAngle=0, labelColor='#1E293B', labelFontWeight='normal', titleColor='#0F172A', grid=True, gridColor='#E2E8F0')), 
-                            x=alt.X('Jumlah Kata', title='Total Jumlah', 
+                            x=alt.X('Jumlah Kata:Q', title='Total Jumlah', 
                                     axis=alt.Axis(labelColor='#475569', titleColor='#0F172A', grid=True, gridColor='#CBD5E1', gridDash=[4,4])),
                             tooltip=['POS Tag', 'Jumlah Kata']
                         ).properties(height=380).configure_axis(
@@ -745,3 +745,4 @@ if st.session_state.local_files:
                                 st.error(f"Error: {e}")
 else:
     st.info("👋 Silakan upload file terlebih dahulu untuk mulai menggunakan dashboard.")
+
