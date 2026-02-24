@@ -1,0 +1,9 @@
+streamlit
+PyPDF2
+python-docx
+spacy
+deep-translator
+nltk
+sumy
+pandas
+altair
