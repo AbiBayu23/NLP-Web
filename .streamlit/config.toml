@@ -1,10 +1,6 @@
-streamlit
-PyPDF2
-python-docx
-spacy
-deep-translator
-nltk
-sumy
-pandas
-altair
-https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1-py3-none-any.whl
+[theme]
+primaryColor="#0EA5E9"
+backgroundColor="#F8FAFC"
+secondaryBackgroundColor="#E0F2FE"
+textColor="#0F172A"
+font="sans serif"
