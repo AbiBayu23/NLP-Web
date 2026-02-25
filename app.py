@@ -13,12 +13,14 @@ from sumy.summarizers.lex_rank import LexRankSummarizer
 import pandas as pd
 from collections import Counter
 import altair as alt
+import io
+from fpdf import FPDF
 
 # ==========================================
 # 1. KONFIGURASI HALAMAN WEB & TEMA
 # ==========================================
 st.set_page_config(
-    page_title="AI NLP Dashboard", 
+    page_title="AI NLP DOCUMENT ANALYSIS", 
     page_icon="☁️", 
     layout="wide",
     initial_sidebar_state="expanded"
@@ -67,7 +69,7 @@ st.markdown("""
         }
     </style>
     <div style='background-color:#E0F2FE; padding:20px; border-radius:12px; border-left: 8px solid #0EA5E9; margin-bottom:25px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);'>
-        <h2 style='color:#0369A1; margin:0; font-weight: 800;'>☁️ Explorer NLP Web App (Sky Edition)</h2>
+        <h2 style='color:#0369A1; margin:0; font-weight: 800;'>☁️ Explorer NLP Documents Analysis</h2>
         <p style='color:#475569; margin:8px 0 0 0; font-size: 15px;'>Multi-File Management • Advanced Visualization • POS Search • Fast Extractive Summarization</p>
     </div>
 """, unsafe_allow_html=True)
@@ -179,6 +181,23 @@ def extract_text(uploaded_file):
         st.error(f"Gagal membaca file: {e}")
     return text
 
+def terjemahkan_teks_panjang(teks, target_lang_code):
+    """Fungsi pembagi teks agar tidak error limit 5000 karakter Google Translate"""
+    paragraf = teks.split('\n')
+    hasil = []
+    for p in paragraf:
+        if p.strip():
+            # Jika ada paragraf yang gila-gilaan panjangnya > 4900 char
+            if len(p) > 4900:
+                potongan = [p[i:i+4900] for i in range(0, len(p), 4900)]
+                for pot in potongan:
+                    hasil.append(GoogleTranslator(source='auto', target=target_lang_code).translate(pot))
+            else:
+                hasil.append(GoogleTranslator(source='auto', target=target_lang_code).translate(p))
+        else:
+            hasil.append("")
+    return '\n'.join(hasil)
+
 if 'local_files' not in st.session_state: st.session_state.local_files = {}
 if 'summary_results' not in st.session_state: st.session_state.summary_results = {}
 
@@ -245,9 +264,9 @@ if st.session_state.local_files:
                     st.caption(f"Jumlah Kelas Kata dominan pada dokumen **{active_file}**")
                     if not df_pos.empty:
                         chart_pos = alt.Chart(df_pos).mark_bar(color="#0284C7", cornerRadiusEnd=4).encode(
-                            y=alt.Y('POS Tag:N', sort='-x', title='Kelas Kata', 
+                            y=alt.Y('POS Tag', sort='-x', title='Kelas Kata', 
                                     axis=alt.Axis(labelAngle=0, labelColor='#1E293B', labelFontWeight='normal', titleColor='#0F172A', grid=True, gridColor='#E2E8F0')), 
-                            x=alt.X('Jumlah Kata:Q', title='Total Jumlah', 
+                            x=alt.X('Jumlah Kata', title='Total Jumlah', 
                                     axis=alt.Axis(labelColor='#475569', titleColor='#0F172A', grid=True, gridColor='#CBD5E1', gridDash=[4,4])),
                             tooltip=['POS Tag', 'Jumlah Kata']
                         ).properties(height=380).configure_axis(
@@ -275,8 +294,8 @@ if st.session_state.local_files:
         # ==========================================
         # 5. TAB FITUR NLP 
         # ==========================================
-        tab_search, tab_pos_search, tab_summary = st.tabs([
-            "🔍 Keyword Search", "🕵️‍♂️ POS Search", "📝 Summarization"
+        tab_search, tab_pos_search, tab_summary, tab_transform = st.tabs([
+            "🔍 Keyword Search", "🕵️‍♂️ POS Search", "📝 Summarization", "🔀 Transformasi Dokumen"
         ])
         
         def render_result_cards(results, query_lemma, current_page, items_per_page, is_pos_search=False, target_tag=None):
@@ -743,6 +762,104 @@ if st.session_state.local_files:
                                 """, unsafe_allow_html=True)
                             except Exception as e: 
                                 st.error(f"Error: {e}")
+        # --- TAB 4: TRANSFORMASI FILE (TERJEMAH & CONVERT) ---
+        with tab_transform:
+            st.markdown("<h3 style='color:#0F172A;'>🔀 Transformasi & Konversi Dokumen</h3>", unsafe_allow_html=True)
+            st.caption("Menerjemahkan keseluruhan dokumen ini dan mengubahnya ke dalam format TXT, DOCX, atau PDF.")
+            
+            # Inisialisasi state untuk teks yang akan di-export (default: original)
+            state_key = f"trans_full_{active_file}"
+            if state_key not in st.session_state:
+                st.session_state[state_key] = teks_dokumen
+                st.session_state[f"lang_{active_file}"] = "Original"
+
+            st.markdown("#### 1. Terjemahkan Keseluruhan Dokumen (Opsional)")
+            col_t1, col_t2 = st.columns([3, 1])
+            with col_t1:
+                target_doc_lang = st.selectbox("Pilih Bahasa Tujuan:", ["(Tidak Perlu, Gunakan Teks Asli)"] + list(DAFTAR_BAHASA.keys()), key=f"sel_trans_{active_file}")
+            with col_t2:
+                st.write("")
+                if st.button("🌐 Mulai Terjemahkan", use_container_width=True, type="primary"):
+                    if target_doc_lang != "(Tidak Perlu, Gunakan Teks Asli)":
+                        with st.spinner(f"Menerjemahkan dokumen ke bahasa {target_doc_lang} (Proses ini mungkin memakan waktu beberapa saat)..."):
+                            try:
+                                hasil_full = terjemahkan_teks_panjang(teks_dokumen, DAFTAR_BAHASA[target_doc_lang])
+                                st.session_state[state_key] = hasil_full
+                                st.session_state[f"lang_{active_file}"] = target_doc_lang
+                                st.success("✅ Terjemahan berhasil!")
+                            except Exception as e:
+                                st.error(f"Terjadi kesalahan saat menerjemahkan: {e}")
+                    else:
+                        st.session_state[state_key] = teks_dokumen
+                        st.session_state[f"lang_{active_file}"] = "Original"
+
+            # Kotak Preview
+            status_bahasa = st.session_state[f"lang_{active_file}"]
+            st.markdown(f"<div style='font-size:14px; font-weight:600; color:#475569; margin-top:15px;'>Preview Teks ({status_bahasa}):</div>", unsafe_allow_html=True)
+            st.text_area("", st.session_state[state_key], height=200, label_visibility="collapsed")
+            
+            st.write("---")
+            
+            st.markdown("#### 2. Konversi Format & Download")
+            st.info("💡 **Catatan untuk PDF:** Jika hasil terjemahan menggunakan huruf non-Latin (seperti Jepang/Korea), karakter mungkin tidak terbaca sempurna di PDF. Disarankan menggunakan DOCX untuk bahasa tersebut.")
+            
+            format_pilihan = st.radio("Pilih Format Output:", ["📄 TXT", "📝 DOCX", "📕 PDF"], horizontal=True)
+            
+            text_to_export = st.session_state[state_key]
+            data_file = None
+            mime_type = ""
+            ekstensi = ""
+            
+            try:
+                if format_pilihan == "📄 TXT":
+                    data_file = text_to_export.encode('utf-8')
+                    mime_type = "text/plain"
+                    ekstensi = "txt"
+                    
+                elif format_pilihan == "📝 DOCX":
+                    doc_export = Document()
+                    paragraf_list = text_to_export.split('\n')
+                    for p in paragraf_list:
+                        if p.strip() == "":
+                            doc_export.add_paragraph() 
+                        else:
+                            doc_export.add_paragraph(p.strip())
+                            
+                    bio = io.BytesIO()
+                    doc_export.save(bio)
+                    data_file = bio.getvalue()
+                    mime_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                    ekstensi = "docx"
+                    
+                elif format_pilihan == "📕 PDF":
+                    pdf = FPDF()
+                    pdf.add_page()
+                    pdf.set_auto_page_break(auto=True, margin=15)
+                    pdf.set_font("Helvetica", size=11)
+                    
+                    paragraf_list = text_to_export.split('\n')
+                    for p in paragraf_list:
+                        p_safe = p.encode('latin-1', 'replace').decode('latin-1').strip()
+                        if p_safe == "":
+                            pdf.ln(4) 
+                        else:
+                            pdf.multi_cell(0, 6, txt=p_safe)
+                            pdf.ln(2)
+                        
+                    data_file = bytes(pdf.output())
+                    mime_type = "application/pdf"
+                    ekstensi = "pdf"
+                    
+                # Tombol Download
+                if data_file:
+                    st.download_button(
+                        label=f"⬇️ Download Dokumen (.poly{ekstensi})",
+                        data=data_file,
+                        file_name=f"Hasil_{status_bahasa}_{active_file.split('.')[0]}.{ekstensi}",
+                        mime=mime_type,
+                        type="primary"
+                    )
+            except Exception as e:
+                st.error(f"Gagal menyiapkan file: {e}")
 else:
     st.info("👋 Silakan upload file terlebih dahulu untuk mulai menggunakan dashboard.")
-
