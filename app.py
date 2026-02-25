@@ -57,6 +57,12 @@ st.markdown("""
             border: 1px solid #CBD5E1 !important;
             cursor: pointer !important;
         }
+            
+        /* Kunci maksimal lebar dropdown khusus di dalam kartu hasil (container) */
+        div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stSelectbox"] {
+            max-width: 140px !important;  /* Tidak akan bisa melar lebih dari 140px di Full Screen */
+            margin-left: auto !important; /* Mendorong dropdown agar mentok ke ujung kanan */
+        }
         
         /* [PERBAIKAN] Trik Visual Aman: Menghilangkan kursor kedip tanpa merusak fungsi klik */
         div[data-baseweb="select"] input {
@@ -412,16 +418,20 @@ if st.session_state.local_files:
             if st.session_state.search_results:
                 total_results = len(st.session_state.search_results)
                 
-                col_info, col_blank, col_filter_text, col_filter_drop = st.columns([5, 1, 3, 1.6], gap="small")
+                col_info, col_blank, col_filter_text, col_filter_drop = st.columns([5, 1, 3, 1.05], gap="small")
                 with col_info:
                     st.markdown(f"<div style='color:#059669; font-weight:bold; font-size:14.5px; padding-top:8px;'>✅ Ditemukan {total_results} baris kalimat.</div>", unsafe_allow_html=True)
                 with col_filter_text:
                     st.markdown("<div style='text-align:right; padding-top:8px; font-size:14px; color:#475569; font-weight:00;'>Tampilkan per halaman:</div>", unsafe_allow_html=True)
                 with col_filter_drop:
-                    opsi_limit = ["5", "10", "25", "50", "100", "All"]
+                    # [PERBAIKAN] Logika Dropdown Dinamis
+                    opsi_dasar = [5, 10, 25, 50, 100]
+                    opsi_limit = [str(x) for x in opsi_dasar if x < total_results]
+                    opsi_limit.append(f"All ({total_results})")
+                    
                     pilihan_limit = st.selectbox("Limit", opsi_limit, key="limit_search", label_visibility="collapsed")
                 
-                if pilihan_limit == "All":
+                if pilihan_limit.startswith("All"):
                     ITEMS_PER_PAGE = total_results if total_results > 0 else 1
                 else:
                     ITEMS_PER_PAGE = int(pilihan_limit)
@@ -438,47 +448,62 @@ if st.session_state.local_files:
                 st.write("") 
 
                 for i, match in enumerate(subset_results):
-                    col_card, col_action = st.columns([8.5, 1.5], gap="small")
-                    
-                    with col_action:
-                        aksi = st.selectbox("Aksi", ["Aksi", "🏷️ POS Tag", "🌐 Trans"], key=f"aksi_{start_idx + i}", label_visibility="collapsed")
-                    
-                    with col_card:
+                    with st.container(border=True):
+                        # --- 1. Proses Highlight Teks ---
                         doc_match = nlp(match)
                         kata_cocok = set([token.text for token in doc_match if token.lemma_.lower() == st.session_state.query_lemma])
                         if kata_cocok:
                             pola_regex = r"\b(" + "|".join(map(re.escape, kata_cocok)) + r")\b"
-                            highlighted = re.sub(pola_regex, r"<mark style='background:#FDE047; color:#0F172A; font-weight:bold; padding:0 4px; border-radius:3px;'>\1</mark>", match, flags=re.I)
+                            highlighted = re.sub(pola_regex, r"<mark style='background:#0EA5E9; color:white; font-weight:bold; padding:0 4px; border-radius:3px;'>\1</mark>", match, flags=re.I)
                         else:
                             highlighted = match
                             
+                        # Tampilkan Kalimat di bagian atas container
+                        st.markdown(f"<div style='color:#334155; font-size:15.5px; margin-bottom:15px; line-height:1.6;'>{highlighted}</div>", unsafe_allow_html=True)
+                        
+                        # --- 2. Hitung POS Pills ---
                         pos_counts = {'NOUN': 0, 'VERB': 0, 'ADJ': 0, 'PRON': 0, 'ADP': 0, 'PROPN': 0}
                         for token in doc_match:
                             if token.pos_ in pos_counts: pos_counts[token.pos_] += 1
                                 
-                        pills_html = "<div style='display:flex; gap:5px; flex-wrap:wrap;'>"
+                        pills_html = "<div style='display:flex; gap:5px; flex-wrap:wrap; margin-top:2px;'>"
                         for pos, count in pos_counts.items():
                             if count > 0:
                                 bg_color = Warna_POS_Utama.get(pos, '#94A3B8')
-                                pills_html += f"<span style='background-color: {bg_color}; color:white; border-radius:4px; padding:2px 8px; font-size:11px; font-weight:600;'>{pos.capitalize()}: {count}</span>"
+                                pills_html += f"<span style='background-color: {bg_color}; color:white; border-radius:4px; padding:3px 8px; font-size:11px; font-weight:600;'>{pos.capitalize()}: {count}</span>"
                         pills_html += "</div>"
+
+                        # --- 3. Tata Letak Bawah (Info, Pills, Dropdown Aksi) ---
+                        # Rasio Emas Streamlit: 70% Kiri, 10% Tengah (Pendorong), 20% Kanan
+                        col_kiri, col_spacer, col_kanan = st.columns([7, 1, 1.18])
                         
-                        html_card = f"""
-                        <div style='background:#FFFFFF; padding:20px; border-radius:10px; border:1px solid #E2E8F0; margin-bottom:10px; box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1); min-height:90px;'>
-                            <div style='color:#334155; font-size:15px; margin-bottom:20px; line-height:1.7;'>{highlighted}</div>
-                            <div style='border-top:1px solid #F1F5F9; padding-top:12px; display:flex; justify-content:space-between; align-items:center;'>
-                                <div style='font-size:11px; color:#0284C7; font-weight:bold; letter-spacing: 0.5px; background:#F0F9FF; padding:3px 8px; border-radius:4px;'>📄 DOKUMEN: {active_file.upper()}</div>
-                                <div>{pills_html}</div>
+                        with col_kiri:
+                            # Teks tidak akan turun ke bawah berkat white-space:nowrap
+                            gabungan_html = f"""
+                            <div style='display:flex; align-items:center; gap:12px; flex-wrap:wrap;'>
+                                <div style='font-size:11px; color:#0284C7; font-weight:bold; background:#F0F9FF; padding:5px 10px; border-radius:4px; border:1px solid #BAE6FD; white-space:nowrap;'>
+                                    📄 {active_file.upper()}
+                                </div>
+                                <div style='margin-top:2px;'>
+                                    {pills_html}
+                                </div>
                             </div>
-                        </div>
-                        """
-                        st.markdown(html_card, unsafe_allow_html=True)
-                        
+                            """
+                            st.markdown(gabungan_html, unsafe_allow_html=True)
+                            
+                        with col_spacer:
+                            # Pemisah kosong agar dropdown tidak melar memakan sisa ruang
+                            st.write("")
+                            
+                        with col_kanan:
+                            # Menggunakan kata "Aksi" agar tidak mudah terpotong di layar split
+                            aksi = st.selectbox("Aksi", ["Aksi", "🏷️ POS Tag", "🌐 Trans"], key=f"aksi_{start_idx + i}", label_visibility="collapsed")
+
+                        # --- 4. Eksekusi Aksi (Akan muncul di dalam kotak yang sama) ---
                         if aksi == "🏷️ POS Tag":
                             st.markdown(get_colored_pos_text(match), unsafe_allow_html=True)
-                            st.write("")
                         elif aksi == "🌐 Trans":
-                            col_lang, col_go, _ = st.columns([3, 1, 6])
+                            col_lang, col_go = st.columns([7, 3])
                             with col_lang:
                                 target_lang_name = st.selectbox("Ke:", list(DAFTAR_BAHASA.keys()), key=f"lang_{start_idx + i}", label_visibility="collapsed")
                             with col_go:
@@ -489,8 +514,9 @@ if st.session_state.local_files:
                                 with st.spinner("Menerjemahkan..."):
                                     try:
                                         hasil_terjemahan = GoogleTranslator(source='auto', target=target_lang_code).translate(match)
-                                        st.markdown(f"<div style='background:#E0F2FE; border: 1px solid #7DD3FC; padding:15px; color:#0369A1; border-radius:8px; font-size:15px; margin-bottom:15px; font-weight:500;'>{hasil_terjemahan}</div>", unsafe_allow_html=True)
-                                    except Exception as e: st.error(f"Error: {e}")
+                                        st.markdown(f"<div style='background:#E0F2FE; border: 1px solid #7DD3FC; padding:15px; color:#0369A1; border-radius:8px; font-size:15px; margin-top:10px; font-weight:500;'>{hasil_terjemahan}</div>", unsafe_allow_html=True)
+                                    except Exception as e: 
+                                        st.error(f"Error: {e}")
 
                 st.write("") 
                 col_blank1, col_p, col_page_info, col_n, col_blank2 = st.columns([2, 1, 2, 1, 2])
@@ -504,6 +530,7 @@ if st.session_state.local_files:
                         st.session_state.current_page += 1; st.rerun()
 
         # --- TAB 2: POS SEARCH ---
+        # --- TAB 2: POS SEARCH ---
         with tab_pos_search:
             st.markdown("<h3 style='color:#0F172A;'>🕵️‍♂️ Pencarian Spesifik (POS Search)</h3>", unsafe_allow_html=True)
             st.caption("Bisa diisi salah satu (hanya kelas kata, atau hanya kata kunci), atau isi dua-duanya untuk pencarian presisi maksimal.")
@@ -514,16 +541,17 @@ if st.session_state.local_files:
             if 'ps_current_page' not in st.session_state: st.session_state.ps_current_page = 0
             
             col_ps1, col_ps2, col_ps3 = st.columns([4, 4, 1.4], gap="small")
+            
             with col_ps1:
-                ps_keyword = st.text_input("Kata Kunci (Opsional):", placeholder="Ketik kata (misal: BI-LSTM)...", key="input_ps_keyword")
-            with col_ps2:
-                ps_target_tag = st.selectbox("Sebagai Kelas Kata (Opsional):", 
+                ps_target_tag = st.selectbox("Kelas Kata:", 
                     ["SEMUA KELAS KATA", "VERB (Kata Kerja)", "NOUN (Kata Benda)", "ADJ (Kata Sifat)", "ADV (Kata Keterangan)", "PROPN (Nama/Entitas)"], 
                     key="input_ps_tag"
-                )
+                )                
+            with col_ps2:
+                ps_keyword = st.text_input("Kata Kunci (Opsional):", placeholder="Ketik kata (misal: BI-LSTM)...", key="input_ps_keyword")            
             with col_ps3:
-                st.write("") 
-                st.write("")
+                # Trik CSS presisi untuk mendorong tombol persis setinggi label teks
+                st.markdown("<div style='margin-top: 27.5px;'></div>", unsafe_allow_html=True)
                 btn_ps_cari = st.button("Cari Presisi", type="primary", use_container_width=True)
                 
             if btn_ps_cari:
@@ -570,16 +598,19 @@ if st.session_state.local_files:
                 else:
                     info_msg = f"✅ Ditemukan {ps_total} kalimat yang memiliki struktur **{st.session_state.ps_tag}**."
                     
-                col_info_ps, col_blank_ps, col_filter_text_ps, col_filter_drop_ps = st.columns([6, 0.5, 3, 2], gap="small")
+                col_info_ps, col_blank_ps, col_filter_text_ps, col_filter_drop_ps = st.columns([6, 0.5, 3, 1.05], gap="small")
                 with col_info_ps:
                     st.markdown(f"<div style='color:#059669; font-weight:bold; font-size:14.5px; padding-top:8px;'>{info_msg}</div>", unsafe_allow_html=True)
                 with col_filter_text_ps:
-                    st.markdown("<div style='text-align:right; padding-top:8px; font-size:14px; color:#475569; font-weight:600;'>Tampilkan per halaman:</div>", unsafe_allow_html=True)
+                    st.markdown("<div style='text-align:right; padding-top:8px; font-size:14px; color:#475569; font-weight:00;'>Tampilkan per halaman:</div>", unsafe_allow_html=True)
                 with col_filter_drop_ps:
-                    ps_opsi_limit = ["5", "10", "25", "50", "100", "All"]
+                    ps_opsi_dasar = [5, 10, 25, 50, 100]
+                    ps_opsi_limit = [str(x) for x in ps_opsi_dasar if x < ps_total]
+                    ps_opsi_limit.append(f"All ({ps_total})")
+                    
                     ps_pilihan_limit = st.selectbox("Limit PS", ps_opsi_limit, key="limit_ps_search", label_visibility="collapsed")
                 
-                if ps_pilihan_limit == "All":
+                if ps_pilihan_limit.startswith("All"):
                     PS_ITEMS_PER_PAGE = ps_total if ps_total > 0 else 1
                 else:
                     PS_ITEMS_PER_PAGE = int(ps_pilihan_limit)
@@ -596,12 +627,7 @@ if st.session_state.local_files:
                 st.write("") 
 
                 for j, match_text in enumerate(ps_subset):
-                    col_ps_card, col_ps_act = st.columns([8.5, 1.5], gap="small")
-                    
-                    with col_ps_act:
-                        ps_aksi = st.selectbox("Aksi", ["Aksi", "🏷️ POS Tag", "🌐 Trans"], key=f"ps_aksi_{ps_start + j}", label_visibility="collapsed")
-                    
-                    with col_ps_card:
+                    with st.container(border=True):
                         doc_match = nlp(match_text)
                         
                         q_lemma2 = ""
@@ -619,35 +645,49 @@ if st.session_state.local_files:
                             match_pos = (token.pos_ == st.session_state.ps_tag) if st.session_state.ps_tag != "ALL" else True
                             
                             if match_kw and match_pos:
-                                highlighted_html += f"<mark style='background:#EF4444; color:white; font-weight:bold; padding:0 4px; border-radius:4px; box-shadow: 0 1px 2px rgba(0,0,0,0.1);'>{token.text}</mark>{token.whitespace_}"
+                                highlighted_html += f"<mark style='background:#0EA5E9; color:white; font-weight:bold; padding:0 4px; border-radius:4px; box-shadow: 0 1px 2px rgba(0,0,0,0.1);'>{token.text}</mark>{token.whitespace_}"
                             else:
                                 highlighted_html += f"{token.text}{token.whitespace_}"
+                                
+                        st.markdown(f"<div style='color:#334155; font-size:15.5px; margin-bottom:15px; line-height:1.6;'>{highlighted_html}</div>", unsafe_allow_html=True)
                                 
                         pills_html = "<div style='display:flex; gap:5px; flex-wrap:wrap;'>"
                         for pos, count in pos_counts.items():
                             if count > 0:
                                 bg_color = Warna_POS_Utama.get(pos, '#94A3B8')
-                                pills_html += f"<span style='background-color: {bg_color}; color:white; border-radius:4px; padding:2px 8px; font-size:11px; font-weight:600;'>{pos.capitalize()}: {count}</span>"
+                                pills_html += f"<span style='background-color: {bg_color}; color:white; border-radius:4px; padding:3px 8px; font-size:11px; font-weight:600;'>{pos.capitalize()}: {count}</span>"
                         pills_html += "</div>"
                         
                         tanda_pos = st.session_state.ps_tag if st.session_state.ps_tag != "ALL" else "BEBAS"
                         
-                        html_card = f"""
-                        <div style='background:#FFFFFF; padding:20px; border-radius:10px; border:1px solid #E2E8F0; margin-bottom:10px; box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1); min-height:90px;'>
-                            <div style='color:#334155; font-size:14.5px; margin-bottom:20px; line-height:1.7;'>{highlighted_html}</div>
-                            <div style='border-top:1px solid #F1F5F9; padding-top:12px; display:flex; justify-content:space-between; align-items:center;'>
-                                <div style='font-size:11px; color:#EF4444; font-weight:bold; letter-spacing: 0.5px; background:#FEF2F2; padding:3px 8px; border-radius:4px;'>🎯 POS TARGET: {tanda_pos}</div>
-                                <div>{pills_html}</div>
-                            </div>
-                        </div>
-                        """
-                        st.markdown(html_card, unsafe_allow_html=True)
+                        # --- 2. Tata Letak Bawah (Target, Pills, Dropdown Aksi) ---
+                        col_kiri_ps, col_spacer_ps, col_kanan_ps = st.columns([7, 1, 1.18])
                         
+                        with col_kiri_ps:
+                            gabungan_html_ps = f"""
+                            <div style='display:flex; align-items:center; gap:12px; flex-wrap:wrap;'>
+                                <div style='font-size:11px; color:white; font-weight:bold; background:#0EA5E9; padding:5px 10px; border-radius:4px; border:1px solid #FECACA; white-space:nowrap;'>
+                                    🎯 TARGET: {tanda_pos}
+                                </div>
+                                <div style='margin-top:2px;'>
+                                    {pills_html}
+                                </div>
+                            </div>
+                            """
+                            st.markdown(gabungan_html_ps, unsafe_allow_html=True)
+                            
+                        with col_spacer_ps:
+                            st.write("")
+                            
+                        with col_kanan_ps:
+                            ps_aksi = st.selectbox("Aksi", ["Aksi", "🏷️ POS Tag", "🌐 Trans"], key=f"ps_aksi_{ps_start + j}", label_visibility="collapsed")
+                        
+                        # --- 3. Eksekusi Aksi ---
                         if ps_aksi == "🏷️ POS Tag":
                             st.markdown(get_colored_pos_text(match_text), unsafe_allow_html=True)
                             st.write("")
                         elif ps_aksi == "🌐 Trans":
-                            col_lang, col_go, _ = st.columns([3, 1, 6])
+                            col_lang, col_go, _ = st.columns([4, 2, 4])
                             with col_lang:
                                 t_lang_name = st.selectbox("Ke:", list(DAFTAR_BAHASA.keys()), key=f"ps_lang_{ps_start + j}", label_visibility="collapsed")
                             with col_go:
@@ -658,7 +698,7 @@ if st.session_state.local_files:
                                 with st.spinner("Menerjemahkan..."):
                                     try:
                                         h_trans = GoogleTranslator(source='auto', target=t_lang_code).translate(match_text)
-                                        st.markdown(f"<div style='background:#E0F2FE; border: 1px solid #7DD3FC; padding:15px; color:#0369A1; border-radius:8px; font-size:15px; margin-bottom:15px; font-weight:500;'>{h_trans}</div>", unsafe_allow_html=True)
+                                        st.markdown(f"<div style='background:#E0F2FE; border: 1px solid #7DD3FC; padding:15px; color:#0369A1; border-radius:8px; font-size:15px; margin-top:10px; font-weight:500;'>{h_trans}</div>", unsafe_allow_html=True)
                                     except Exception as e: st.error(f"Error: {e}")
 
                 st.write("") 
@@ -698,7 +738,7 @@ if st.session_state.local_files:
                         html_ringkasan = "<br><br>".join(list_paragraf)
                         st.session_state.summary_results[active_file] = html_ringkasan
                         
-                        st.success(f"✅ Ekstraksi selesai! Berhasil merangkum '{active_file}' ({total_kalimat_dokumen} kalimat) menjadi {len(kalimat_terekstrak)} kalimat inti.")
+                        st.success(f"✅ Ekstraksi selesai! Berhasil merangkum '{active_file}' ({total_kalimat_dokumen} kalimat).")
                     except Exception as e:
                         st.error(f"Terjadi kesalahan saat mengekstrak: {e}")
 
