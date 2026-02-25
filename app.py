@@ -51,20 +51,17 @@ st.markdown("""
             box-shadow: 0 0 0 1px #0EA5E9 !important;
         }
         
-        /* Mempercantik fisik tombol selectbox */
         div[data-baseweb="select"] > div {
             background-color: #FFFFFF !important;
             border: 1px solid #CBD5E1 !important;
             cursor: pointer !important;
         }
             
-        /* Kunci maksimal lebar dropdown khusus di dalam kartu hasil (container) */
         div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stSelectbox"] {
             max-width: 140px !important;  /* Tidak akan bisa melar lebih dari 140px di Full Screen */
             margin-left: auto !important; /* Mendorong dropdown agar mentok ke ujung kanan */
         }
         
-        /* [PERBAIKAN] Trik Visual Aman: Menghilangkan kursor kedip tanpa merusak fungsi klik */
         div[data-baseweb="select"] input {
             caret-color: transparent !important; /* Menghilangkan kursor berkedip | / I-beam */
             cursor: pointer !important; /* Memaksa ikon mouse menjadi tangan (pointer) */
@@ -154,6 +151,23 @@ DAFTAR_BAHASA = {
     'French': 'fr', 'German': 'de', 'Japanese': 'ja', 'Korean': 'ko'
 }
 
+MAP_SEMUA_POS = {
+    "NOUN (Kata Benda)": "NOUN",
+    "VERB (Kata Kerja)": "VERB",
+    "ADJ (Kata Sifat)": "ADJ",
+    "ADV (Kata Keterangan)": "ADV",
+    "PROPN (Nama/Entitas)": "PROPN",
+    "PRON (Kata Ganti)": "PRON",
+    "ADP (Preposisi/Kata Depan)": "ADP",
+    "DET (Penentu/Determiner)": "DET",
+    "AUX (Kata Bantu)": "AUX",
+    "NUM (Angka)": "NUM",
+    "PART (Partikel)": "PART",
+    "SCONJ (Konjungsi Subordinatif)": "SCONJ",
+    "CCONJ (Konjungsi Koordinatif)": "CCONJ",
+    "INTJ (Interjeksi/Seruan)": "INTJ"
+}
+
 Warna_POS_Utama = {
     'NOUN': '#2563EB', 'VERB': '#D97706', 'ADJ': '#059669', 'ADV': '#DC2626', 
     'PRON': '#7C3AED', 'PROPN': '#E11D48', 'ADP': '#475569', 'DET': '#0891B2', 
@@ -193,7 +207,6 @@ def terjemahkan_teks_panjang(teks, target_lang_code):
     hasil = []
     for p in paragraf:
         if p.strip():
-            # Jika ada paragraf yang gila-gilaan panjangnya > 4900 char
             if len(p) > 4900:
                 potongan = [p[i:i+4900] for i in range(0, len(p), 4900)]
                 for pot in potongan:
@@ -207,6 +220,23 @@ def terjemahkan_teks_panjang(teks, target_lang_code):
 if 'local_files' not in st.session_state: st.session_state.local_files = {}
 if 'summary_results' not in st.session_state: st.session_state.summary_results = {}
 
+def bersihkan_teks_untuk_analisis(teks_dokumen):
+    """
+    Membersihkan teks dari bagian yang tidak diinginkan khusus untuk proses NLP.
+    """
+    pola_referensi = re.compile(r'\n\s*(DAFTAR PUSTAKA|REFERENCES|BIBLIOGRAPHY|REFERENSI).*', re.IGNORECASE | re.DOTALL)
+    teks = re.sub(pola_referensi, '', teks_dokumen)
+
+    pola_awal = re.compile(r'.*?(?=BAB\s?I|INTRODUCTION|PENDAHULUAN)', re.IGNORECASE | re.DOTALL)
+    if re.search(r'BAB\s?I|INTRODUCTION|PENDAHULUAN', teks, re.IGNORECASE):
+        teks = re.sub(pola_awal, '', teks, count=1)
+
+    teks = re.sub(r'(?m)^(Figure|Gambar|Table|Tabel|DOI|ISSN|Source).*$', '', teks)
+    teks = re.sub(r'\[\d+\]', '', teks) 
+    teks = re.sub(r'\(\w+ et al\., \d{4}\)', '', teks)
+
+    return teks.strip()
+
 # ==========================================
 # 3. UI UPLOAD & MANAJEMEN FILE
 # ==========================================
@@ -218,6 +248,7 @@ if uploaded_files:
         if file.name not in st.session_state.local_files:
             with st.spinner(f"Menganalisis {file.name}..."):
                 raw_text = extract_text(file)
+                teks_bersih = bersihkan_teks_untuk_analisis(raw_text)
                 pola_kata = r'\b[a-zA-Z0-9]+(?:-[a-zA-Z0-9]+)*\b'
                 semua_kata = re.findall(pola_kata, raw_text.lower())
                 
@@ -228,7 +259,8 @@ if uploaded_files:
                 kalimat_count = len(list(doc_stats.sents))
                 
                 st.session_state.local_files[file.name] = {
-                    'text': raw_text, 
+                    'text': raw_text,
+                    'cleaned': teks_bersih,
                     'vocab': vocab_dokumen, 
                     'stats': {'k': kalimat_count, 'w': kata_count}
                 }
@@ -253,6 +285,7 @@ if st.session_state.local_files:
         """, unsafe_allow_html=True)
         
         teks_dokumen = st.session_state.local_files[active_file]['text']
+        teks_bersih = st.session_state.local_files[active_file]['cleaned']
         
         # ==========================================
         # 4. VISUALISASI UTAMA
@@ -316,10 +349,8 @@ if st.session_state.local_files:
                 
                 with col_c:
                     doc_m = nlp(match)
-                    # [PERBAIKAN DINAMIS] Menghitung SEMUA jenis tata bahasa yang ada di kalimat
                     counts = Counter([t.pos_ for t in doc_m if t.pos_ not in ['SPACE', 'PUNCT', 'SYM', 'X']])
                     
-                    # Highlight Logic
                     highlighted = ""
                     for token in doc_m:
                         match_logic = (token.lemma_.lower() == query_lemma) if query_lemma else True
@@ -332,7 +363,6 @@ if st.session_state.local_files:
                         else:
                             highlighted += f"{token.text}{token.whitespace_}"
 
-                    # Build dynamic pills
                     pills_html = "<div style='display:flex; gap:5px; flex-wrap:wrap;'>"
                     for pos in sorted(counts.keys()):
                         bg = Warna_POS_Utama.get(pos, '#94A3B8')
@@ -359,7 +389,7 @@ if st.session_state.local_files:
         # --- TAB 1: SEARCHING ---
         with tab_search:
             st.markdown("<h3 style='color:#0F172A;'>🔍 Pencarian Pintar (Lemmatization)</h3>", unsafe_allow_html=True)
-            
+
             with st.expander("ℹ️ Tentang Fitur & Cara Pakai"):
                 st.info("""
                 **Deskripsi:** Mencari kata berdasarkan *Lemma* (kata dasar). Mencari 'running' juga akan menemukan 'run'.
@@ -374,6 +404,34 @@ if st.session_state.local_files:
                 3. Klik **Aksi** di pojok kanan kartu kalimat untuk analisis mendalam.
                 """)
 
+            col_input, col_btn = st.columns([7, 1], gap="small")
+            with col_input:
+                query_aktif = st.text_input(
+                    "Pencarian", 
+                    key="input_search_key",
+                    placeholder="Ketik kata dan tekan Enter...", 
+                    label_visibility="collapsed"
+                )
+            with col_btn:
+                btn_cari = st.button("Cari", key="btn_search_key", use_container_width=True, type="primary")
+
+            if query_aktif:
+                if st.session_state.get('last_query') != query_aktif or btn_cari:
+                    with st.spinner("Mencari..."):
+                        query_doc = nlp(query_aktif.strip())
+                        query_lemma = query_doc[0].lemma_.lower() if len(query_doc) > 0 else query_aktif.lower()
+                        st.session_state.query_lemma = query_lemma
+                        
+                        doc = nlp(teks_bersih[:100000])
+                        matches = [s.text.strip() for s in doc.sents if any(token.lemma_.lower() == query_lemma for token in s)]
+                        
+                        st.session_state.search_results = matches
+                        st.session_state.current_page = 0
+                        st.session_state.last_query = query_aktif
+
+                if not st.session_state.search_results:
+                    st.warning(f"🔍 Kata '{query_aktif}' tidak ditemukan dalam isi dokumen.")
+
             if 'teks_pencarian' not in st.session_state: st.session_state.teks_pencarian = ""
             if 'query_lemma' not in st.session_state: st.session_state.query_lemma = "" 
             if 'trigger_search' not in st.session_state: st.session_state.trigger_search = False
@@ -386,12 +444,6 @@ if st.session_state.local_files:
                     st.session_state.teks_pencarian = pilihan
                     st.session_state.trigger_search = True
                     st.session_state.current_page = 0
-
-            col_input, col_btn = st.columns([7, 1], gap="small")
-            with col_input:
-                query_aktif = st.text_input("Pencarian", key="teks_pencarian", placeholder="Ketik kata kunci (misal: analysis)...", label_visibility="collapsed")
-            with col_btn:
-                btn_cari = st.button("Cari", use_container_width=True, type="primary")
 
             if query_aktif:
                 sinonim_set = set()
@@ -420,14 +472,24 @@ if st.session_state.local_files:
                     query_lemma = query_doc[0].lemma_.lower() if len(query_doc) > 0 else st.session_state.teks_pencarian.lower()
                     st.session_state.query_lemma = query_lemma
                     
-                    doc = nlp(teks_dokumen[:100000])
+                    doc = nlp(teks_bersih[:100000]) 
                     matches = []
                     for s in doc.sents:
                         if any(token.lemma_.lower() == query_lemma for token in s):
                             matches.append(s.text.strip())
-                            
-                    st.session_state.search_results = matches
-                    st.session_state.current_page = 0
+                
+                    if not matches:
+                        st.warning(f"🔍 **Kata '{st.session_state.teks_pencarian}' tidak ditemukan.**")
+                        st.info("""
+                            **Tips:**
+                            * Pastikan ejaan kata sudah benar.
+                            * Cobalah mencari kata dasar (misal: cari 'run' alih-alih 'running').
+                            * Jika kata tersebut ada di **Daftar Pustaka** atau **Gambar**, ia sengaja disembunyikan dari pencarian ini.
+                        """)
+                        st.session_state.search_results = []
+                    else:
+                        st.session_state.search_results = matches
+                        st.session_state.current_page = 0
 
             if st.session_state.search_results:
                 total_results = len(st.session_state.search_results)
@@ -438,7 +500,6 @@ if st.session_state.local_files:
                 with col_filter_text:
                     st.markdown("<div style='text-align:right; padding-top:8px; font-size:14px; color:#475569; font-weight:00;'>Tampilkan per halaman:</div>", unsafe_allow_html=True)
                 with col_filter_drop:
-                    # [PERBAIKAN] Logika Dropdown Dinamis
                     opsi_dasar = [5, 10, 25, 50, 100]
                     opsi_limit = [str(x) for x in opsi_dasar if x < total_results]
                     opsi_limit.append(f"All ({total_results})")
@@ -463,7 +524,6 @@ if st.session_state.local_files:
 
                 for i, match in enumerate(subset_results):
                     with st.container(border=True):
-                        # --- 1. Proses Highlight Teks ---
                         doc_match = nlp(match)
                         kata_cocok = set([token.text for token in doc_match if token.lemma_.lower() == st.session_state.query_lemma])
                         if kata_cocok:
@@ -472,10 +532,8 @@ if st.session_state.local_files:
                         else:
                             highlighted = match
                             
-                        # Tampilkan Kalimat di bagian atas container
                         st.markdown(f"<div style='color:#334155; font-size:15.5px; margin-bottom:15px; line-height:1.6;'>{highlighted}</div>", unsafe_allow_html=True)
                         
-                        # --- 2. Hitung POS Pills ---
                         pos_counts = {'NOUN': 0, 'VERB': 0, 'ADJ': 0, 'PRON': 0, 'ADP': 0, 'PROPN': 0}
                         for token in doc_match:
                             if token.pos_ in pos_counts: pos_counts[token.pos_] += 1
@@ -487,12 +545,8 @@ if st.session_state.local_files:
                                 pills_html += f"<span style='background-color: {bg_color}; color:white; border-radius:4px; padding:3px 8px; font-size:11px; font-weight:600;'>{pos.capitalize()}: {count}</span>"
                         pills_html += "</div>"
 
-                        # --- 3. Tata Letak Bawah (Info, Pills, Dropdown Aksi) ---
-                        # Rasio Emas Streamlit: 70% Kiri, 10% Tengah (Pendorong), 20% Kanan
-                        col_kiri, col_spacer, col_kanan = st.columns([7, 1, 1.18])
-                        
+                        col_kiri, col_spacer, col_kanan = st.columns([7, 1, 1.18])                        
                         with col_kiri:
-                            # Teks tidak akan turun ke bawah berkat white-space:nowrap
                             gabungan_html = f"""
                             <div style='display:flex; align-items:center; gap:12px; flex-wrap:wrap;'>
                                 <div style='font-size:11px; color:#0284C7; font-weight:bold; background:#F0F9FF; padding:5px 10px; border-radius:4px; border:1px solid #BAE6FD; white-space:nowrap;'>
@@ -504,16 +558,11 @@ if st.session_state.local_files:
                             </div>
                             """
                             st.markdown(gabungan_html, unsafe_allow_html=True)
-                            
                         with col_spacer:
-                            # Pemisah kosong agar dropdown tidak melar memakan sisa ruang
                             st.write("")
-                            
                         with col_kanan:
-                            # Menggunakan kata "Aksi" agar tidak mudah terpotong di layar split
                             aksi = st.selectbox("Aksi", ["Aksi", "🏷️ POS Tag", "🌐 Trans"], key=f"aksi_{start_idx + i}", label_visibility="collapsed")
 
-                        # --- 4. Eksekusi Aksi (Akan muncul di dalam kotak yang sama) ---
                         if aksi == "🏷️ POS Tag":
                             st.markdown(get_colored_pos_text(match), unsafe_allow_html=True)
                         elif aksi == "🌐 Trans":
@@ -571,51 +620,53 @@ if st.session_state.local_files:
             col_ps1, col_ps2, col_ps3 = st.columns([4, 4, 1.4], gap="small")
             
             with col_ps1:
-                ps_target_tag = st.selectbox("Kelas Kata:", 
-                    ["SEMUA KELAS KATA", "VERB (Kata Kerja)", "NOUN (Kata Benda)", "ADJ (Kata Sifat)", "ADV (Kata Keterangan)", "PROPN (Nama/Entitas)"], 
-                    key="input_ps_tag"
-                )                
+                ps_label_pilihan = st.selectbox("Pilih Kelas Kata:", list(MAP_SEMUA_POS.keys()), key="input_ps_tag")
+                ps_target_tag = MAP_SEMUA_POS[ps_label_pilihan]
+                
             with col_ps2:
-                ps_keyword = st.text_input("Kata Kunci (Opsional):", placeholder="Ketik kata (misal: BI-LSTM)...", key="input_ps_keyword")            
+                ps_keyword = st.text_input("Kata Kunci (Opsional):", placeholder="Ketik kata (misal: Learn)...", key="input_ps_keyword")
+                
             with col_ps3:
-                # Trik CSS presisi untuk mendorong tombol persis setinggi label teks
                 st.markdown("<div style='margin-top: 27.5px;'></div>", unsafe_allow_html=True)
                 btn_ps_cari = st.button("Cari Presisi", type="primary", use_container_width=True)
+
+            if ps_keyword or ps_target_tag != "ALL":
+                current_key = f"{ps_target_tag}_{ps_keyword}_{active_file}"
                 
-            if btn_ps_cari:
-                if not ps_keyword.strip() and ps_target_tag == "SEMUA KELAS KATA":
-                    st.warning("⚠️ Masukkan kata kunci ATAU pilih kelas kata terlebih dahulu.")
-                else:
-                    map_tags = {"SEMUA KELAS KATA": "ALL", "VERB (Kata Kerja)": "VERB", "NOUN (Kata Benda)": "NOUN", "ADJ (Kata Sifat)": "ADJ", "ADV (Kata Keterangan)": "ADV", "PROPN (Nama/Entitas)": "PROPN"}
-                    target_tag = map_tags[ps_target_tag]
+                if btn_ps_cari or st.session_state.get('last_ps_key') != current_key:
                     
                     st.session_state.ps_query = ps_keyword.strip()
-                    st.session_state.ps_tag = target_tag
-                
-                    q_lemma = ""
-                    if st.session_state.ps_query:
-                        q_doc = nlp(st.session_state.ps_query)
-                        q_lemma = q_doc[0].lemma_.lower() if len(q_doc) > 0 else st.session_state.ps_query.lower()
+                    st.session_state.ps_tag = ps_target_tag
                     
-                    doc = nlp(teks_dokumen[:100000])
-                    ps_matches = []
-                    
-                    for s in doc.sents:
-                        match_found = False
-                        for token in s:
-                            match_kw = (token.lemma_.lower() == q_lemma) if q_lemma else True
-                            match_pos = (token.pos_ == target_tag) if target_tag != "ALL" else True
-                            
-                            if match_kw and match_pos:
-                                match_found = True
-                                break
+                    with st.spinner("Mencari..."):
+                        q_lemma = ""
+                        if st.session_state.ps_query:
+                            q_doc = nlp(st.session_state.ps_query)
+                            q_lemma = q_doc[0].lemma_.lower() if len(q_doc) > 0 else st.session_state.ps_query.lower()
                         
-                        if match_found:
-                            ps_matches.append(s.text.strip())
+                        doc = nlp(teks_bersih[:100000])
+                        ps_matches = []
+                        
+                        for s in doc.sents:
+                            match_found = False
+                            for token in s:
+                                match_kw = (token.lemma_.lower() == q_lemma) if q_lemma else True
+                                match_pos = (token.pos_ == st.session_state.ps_tag) if st.session_state.ps_tag != "ALL" else True
+                                
+                                if match_kw and match_pos:
+                                    match_found = True
+                                    break
                             
-                    st.session_state.ps_results = ps_matches
-                    st.session_state.ps_current_page = 0
-            
+                            if match_found:
+                                ps_matches.append(s.text.strip())
+                        
+                        st.session_state.ps_results = ps_matches
+                        st.session_state.ps_current_page = 0
+                        st.session_state.last_ps_key = current_key
+
+            if (ps_keyword or ps_target_tag != "ALL") and not st.session_state.ps_results:
+                st.warning(f"🕵️‍♂️ Tidak ditemukan kata yang sesuai di isi utama dokumen.")
+
             if st.session_state.ps_results:
                 ps_total = len(st.session_state.ps_results)
                 
@@ -672,7 +723,7 @@ if st.session_state.local_files:
                             match_kw = (token.lemma_.lower() == q_lemma2) if q_lemma2 else True
                             match_pos = (token.pos_ == st.session_state.ps_tag) if st.session_state.ps_tag != "ALL" else True
                             
-                            if match_kw and match_pos:
+                            if match_kw and match_pos and (q_lemma2 or st.session_state.ps_tag != "ALL"):
                                 highlighted_html += f"<mark style='background:#0EA5E9; color:white; font-weight:bold; padding:0 4px; border-radius:4px; box-shadow: 0 1px 2px rgba(0,0,0,0.1);'>{token.text}</mark>{token.whitespace_}"
                             else:
                                 highlighted_html += f"{token.text}{token.whitespace_}"
@@ -688,7 +739,6 @@ if st.session_state.local_files:
                         
                         tanda_pos = st.session_state.ps_tag if st.session_state.ps_tag != "ALL" else "BEBAS"
                         
-                        # --- 2. Tata Letak Bawah (Target, Pills, Dropdown Aksi) ---
                         col_kiri_ps, col_spacer_ps, col_kanan_ps = st.columns([7, 1, 1.18])
                         
                         with col_kiri_ps:
@@ -710,7 +760,6 @@ if st.session_state.local_files:
                         with col_kanan_ps:
                             ps_aksi = st.selectbox("Aksi", ["Aksi", "🏷️ POS Tag", "🌐 Trans"], key=f"ps_aksi_{ps_start + j}", label_visibility="collapsed")
                         
-                        # --- 3. Eksekusi Aksi ---
                         if ps_aksi == "🏷️ POS Tag":
                             st.markdown(get_colored_pos_text(match_text), unsafe_allow_html=True)
                             st.write("")
@@ -744,7 +793,6 @@ if st.session_state.local_files:
         with tab_summary:
             st.markdown("<h3 style='color:#0F172A;'>📝 Ekstraksi Dokumen Cepat (LexRank)</h3>", unsafe_allow_html=True)
             
-            # --- TOMBOL INFO TAB 3 ---
             with st.expander("ℹ️ Tentang Fitur & Cara Pakai"):
                 st.info("""
                 **Deskripsi:** Menggunakan algoritma *LexRank* untuk mengekstrak kalimat-kalimat paling penting yang mewakili keseluruhan isi dokumen secara otomatis.
@@ -846,7 +894,6 @@ if st.session_state.local_files:
             st.markdown("<h3 style='color:#0F172A;'>🔀 Transformasi & Konversi Dokumen</h3>", unsafe_allow_html=True)
             st.caption("Menerjemahkan keseluruhan dokumen ini dan mengubahnya ke dalam format TXT, DOCX, atau PDF.")
             
-            # Inisialisasi state untuk teks yang akan di-export (default: original)
             state_key = f"trans_full_{active_file}"
             if state_key not in st.session_state:
                 st.session_state[state_key] = teks_dokumen
@@ -872,7 +919,6 @@ if st.session_state.local_files:
                         st.session_state[state_key] = teks_dokumen
                         st.session_state[f"lang_{active_file}"] = "Original"
 
-            # Kotak Preview
             status_bahasa = st.session_state[f"lang_{active_file}"]
             st.markdown(f"<div style='font-size:14px; font-weight:600; color:#475569; margin-top:15px;'>Preview Teks ({status_bahasa}):</div>", unsafe_allow_html=True)
             st.text_area("", st.session_state[state_key], height=200, label_visibility="collapsed")
@@ -929,7 +975,6 @@ if st.session_state.local_files:
                     mime_type = "application/pdf"
                     ekstensi = "pdf"
                     
-                # Tombol Download
                 if data_file:
                     st.download_button(
                         label=f"⬇️ Download Dokumen (.poly{ekstensi})",
