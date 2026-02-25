@@ -360,6 +360,20 @@ if st.session_state.local_files:
         with tab_search:
             st.markdown("<h3 style='color:#0F172A;'>🔍 Pencarian Pintar (Lemmatization)</h3>", unsafe_allow_html=True)
             
+            with st.expander("ℹ️ Tentang Fitur & Cara Pakai"):
+                st.info("""
+                **Deskripsi:** Mencari kata berdasarkan *Lemma* (kata dasar). Mencari 'running' juga akan menemukan 'run'.
+                
+                **Fitur Dropdown Aksi (Di Setiap Kalimat):**
+                * **🏷️ POS Tag:** Membedah kalimat tersebut secara instan untuk melihat kelas kata (Noun, Verb, dll) dengan kode warna.
+                * **🌐 Trans:** Menerjemahkan kalimat terpilih saja ke bahasa lain tanpa memproses seluruh dokumen.
+                
+                **Cara Pakai:**
+                1. Masukkan kata kunci dan klik **Cari**.
+                2. Gunakan **Saran Kata** untuk eksplorasi kata terkait.
+                3. Klik **Aksi** di pojok kanan kartu kalimat untuk analisis mendalam.
+                """)
+
             if 'teks_pencarian' not in st.session_state: st.session_state.teks_pencarian = ""
             if 'query_lemma' not in st.session_state: st.session_state.query_lemma = "" 
             if 'trigger_search' not in st.session_state: st.session_state.trigger_search = False
@@ -530,9 +544,23 @@ if st.session_state.local_files:
                         st.session_state.current_page += 1; st.rerun()
 
         # --- TAB 2: POS SEARCH ---
-        # --- TAB 2: POS SEARCH ---
         with tab_pos_search:
             st.markdown("<h3 style='color:#0F172A;'>🕵️‍♂️ Pencarian Spesifik (POS Search)</h3>", unsafe_allow_html=True)
+
+            with st.expander("ℹ️ Tentang Fitur & Cara Pakai"):
+                st.info("""
+                **Deskripsi:** Mencari kalimat berdasarkan peran tata bahasa (*Part-of-Speech*).
+                
+                **Fitur Dropdown Aksi (Di Setiap Kalimat):**
+                * **🏷️ POS Tag:** Menampilkan label tata bahasa lengkap untuk seluruh kata dalam kalimat tersebut.
+                * **🌐 Trans:** Menerjemahkan kalimat hasil temuan ke bahasa tujuan pilihan Anda.
+                
+                **Cara Pakai:**
+                1. Pilih **Kelas Kata** yang ingin dicari (misal: NOUN untuk benda).
+                2. Masukkan **Kata Kunci** jika ingin mencari kata spesifik dengan peran tertentu.
+                3. Klik **Cari Presisi** dan gunakan menu **Aksi** pada hasil yang muncul.
+                """)
+
             st.caption("Bisa diisi salah satu (hanya kelas kata, atau hanya kata kunci), atau isi dua-duanya untuk pencarian presisi maksimal.")
             
             if 'ps_query' not in st.session_state: st.session_state.ps_query = ""
@@ -715,6 +743,17 @@ if st.session_state.local_files:
         # --- TAB 3: SUMMARIZATION ---
         with tab_summary:
             st.markdown("<h3 style='color:#0F172A;'>📝 Ekstraksi Dokumen Cepat (LexRank)</h3>", unsafe_allow_html=True)
+            
+            # --- TOMBOL INFO TAB 3 ---
+            with st.expander("ℹ️ Tentang Fitur & Cara Pakai"):
+                st.info("""
+                **Deskripsi:** Menggunakan algoritma *LexRank* untuk mengekstrak kalimat-kalimat paling penting yang mewakili keseluruhan isi dokumen secara otomatis.
+                
+                **Cara Pakai:**
+                1. Klik tombol **🚀 Mulai Ekstraksi Kilat**.
+                2. Tunggu hingga ringkasan muncul dalam bentuk paragraf.
+                3. Gunakan menu **Aksi** di bawah ringkasan untuk membedah tata bahasa atau menerjemahkannya.
+                """)
             st.caption("Algoritma ini memindai secara cerdas dan menyusun poin-poin paling vital dari file Anda menjadi paragraf yang rapi dan padat.")
             
             if st.button("🚀 Mulai Ekstraksi Kilat", type="primary"):
