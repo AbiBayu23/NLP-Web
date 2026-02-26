@@ -38,8 +38,7 @@ st.markdown("""
         [data-testid="stFileUploadDropzone"]:hover {
             border: 2px dashed #0EA5E9 !important;
             background-color: #F0F9FF !important;
-        }
-        
+        }        
         div[data-testid="stTextInput"] input { 
             color: #0F172A !important; 
             font-weight:500 !important; 
@@ -49,24 +48,20 @@ st.markdown("""
         div[data-testid="stTextInput"] input:focus {
             border-color: #0EA5E9 !important;
             box-shadow: 0 0 0 1px #0EA5E9 !important;
-        }
-        
+        }        
         div[data-baseweb="select"] > div {
             background-color: #FFFFFF !important;
             border: 1px solid #CBD5E1 !important;
             cursor: pointer !important;
-        }
-            
+        }            
         div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stSelectbox"] {
-            max-width: 140px !important;  /* Tidak akan bisa melar lebih dari 140px di Full Screen */
-            margin-left: auto !important; /* Mendorong dropdown agar mentok ke ujung kanan */
-        }
-        
+            max-width: 140px !important;
+            margin-left: auto !important;
+        }        
         div[data-baseweb="select"] input {
-            caret-color: transparent !important; /* Menghilangkan kursor berkedip | / I-beam */
-            cursor: pointer !important; /* Memaksa ikon mouse menjadi tangan (pointer) */
-        }
-        
+            caret-color: transparent !important;
+            cursor: pointer !important;
+        }        
         button[data-baseweb="tab"] {
             background-color: transparent !important;
         }
@@ -168,6 +163,23 @@ MAP_SEMUA_POS = {
     "INTJ (Interjeksi/Seruan)": "INTJ"
 }
 
+deskripsi_pos = {
+    "NOUN": "Merujuk pada benda, manusia, tempat, atau ide abstrak (Contoh: buku, keadilan).",
+    "VERB": "Menyatakan tindakan, proses, atau keadaan (Contoh: makan, berjalan, ada).",
+    "ADJ": "Menjelaskan ciri, sifat, atau keadaan dari kata benda (Contoh: besar, pintar).",
+    "ADV": "Memberikan keterangan tambahan pada verba atau adjektiva (Contoh: sangat, kemarin).",
+    "PROPN": "Nama diri yang spesifik seperti nama orang, tempat, atau merek (Contoh: Jakarta, Budi).",
+    "PRON": "Kata yang menggantikan penyebutan benda atau orang (Contoh: saya, mereka, itu).",
+    "ADP": "Kata depan yang menunjukkan hubungan ruang atau waktu (Contoh: di, ke, dari).",
+    "DET": "Kata yang memperjelas atau membatasi kata benda (Contoh: sebuah, setiap, ini).",
+    "AUX": "Kata bantu yang mendampingi kata kerja utama (Contoh: telah, sedang, akan).",
+    "NUM": "Menunjukkan jumlah, kuantitas, atau urutan angka (Contoh: satu, 2026, pertama).",
+    "PART": "Kata tugas yang memiliki fungsi gramatikal khusus (Contoh: -lah, -kah, bukan).",
+    "SCONJ": "Penghubung antara anak kalimat dan induk kalimat (Contoh: karena, jika, bahwa).",
+    "CCONJ": "Penghubung dua unsur kalimat yang setara atau sejajar (Contoh: dan, atau, tetapi).",
+    "INTJ": "Kata seru untuk mengungkapkan emosi, perasaan, atau sapaan (Contoh: wah, aduh, halo)."
+}
+
 Warna_POS_Utama = {
     'NOUN': '#2563EB', 'VERB': '#D97706', 'ADJ': '#059669', 'ADV': '#DC2626', 
     'PRON': '#7C3AED', 'PROPN': '#E11D48', 'ADP': '#475569', 'DET': '#0891B2', 
@@ -267,7 +279,7 @@ if uploaded_files:
 
 if st.session_state.local_files:
     file_names = list(st.session_state.local_files.keys())
-    col1, col2 = st.columns([8.5, 1.7])
+    col1, col2 = st.columns([8.5, 1.7], gap = "small")
     with col1: active_file = st.selectbox("Pilih Dokumen Aktif:", file_names)
     with col2:
         st.write("")
@@ -378,6 +390,15 @@ if st.session_state.local_files:
                     
                     if aksi == "🏷️ POS Tag":
                         st.markdown(get_colored_pos_text(match), unsafe_allow_html=True); st.write("")
+                        st.write("---")
+                        info_tag = st.selectbox(
+                            "💡 Bingung dengan label di atas? Pilih untuk penjelasan:", 
+                            options=list(deskripsi_pos.keys()),
+                            key=f"help_{i}_{start}"
+                        )
+                        st.info(deskripsi_pos[info_tag])
+                        st.write("")
+
                     elif aksi == "🌐 Trans":
                         l1, l2, _ = st.columns([3, 1, 6])
                         with l1: target_lang = st.selectbox("Ke:", list(DAFTAR_BAHASA.keys()), key=f"tr_{i}_{start}", label_visibility="collapsed")
@@ -385,26 +406,29 @@ if st.session_state.local_files:
                         if go:
                             res = GoogleTranslator(source='auto', target=DAFTAR_BAHASA[target_lang]).translate(match)
                             st.markdown(f"<div style='background:#E0F2FE; border: 1px solid #7DD3FC; padding:15px; color:#0369A1; border-radius:8px; font-size:15px; margin-bottom:15px;'>{res}</div>", unsafe_allow_html=True)
-
+                            
         # --- TAB 1: SEARCHING ---
         with tab_search:
-            st.markdown("<h3 style='color:#0F172A;'>🔍 Pencarian Pintar (Lemmatization)</h3>", unsafe_allow_html=True)
+            st.markdown("<h3 style='color:#0F172A;'>🔍 Pencarian Pintar</h3>", unsafe_allow_html=True)
 
+            # --- MODIFIKASI 1: Menghapus slider ambang batas ---
             with st.expander("ℹ️ Tentang Fitur & Cara Pakai"):
                 st.info("""
-                **Deskripsi:** Mencari kata berdasarkan *Lemma* (kata dasar). Mencari 'running' juga akan menemukan 'run'.
-                
-                **Fitur Dropdown Aksi (Di Setiap Kalimat):**
-                * **🏷️ POS Tag:** Membedah kalimat tersebut secara instan untuk melihat kelas kata (Noun, Verb, dll) dengan kode warna.
-                * **🌐 Trans:** Menerjemahkan kalimat terpilih saja ke bahasa lain tanpa memproses seluruh dokumen.
-                
-                **Cara Pakai:**
-                1. Masukkan kata kunci dan klik **Cari**.
-                2. Gunakan **Saran Kata** untuk eksplorasi kata terkait.
-                3. Klik **Aksi** di pojok kanan kartu kalimat untuk analisis mendalam.
-                """)
+                    **Deskripsi:** Mencari kata berdasarkan *Lemma* (kata dasar) atau *Semantic Search* (kemiripan makna).
+                    
+                    **Fitur Dropdown Aksi (Di Setiap Kalimat):**
+                    * **🏷️ POS Tag:** Membedah kalimat tersebut secara instan untuk melihat kelas kata (Noun, Verb, dll) dengan kode warna.
+                    * **🌐 Trans:** Menerjemahkan kalimat terpilih saja ke bahasa lain tanpa memproses seluruh dokumen.
+                    
+                    **Cara Pakai:**
+                    1. Masukkan kata kunci dan klik **Cari**.
+                    2. Gunakan **Saran Kata** untuk eksplorasi kata terkait.
+                    3. Klik **Aksi** di pojok kanan kartu kalimat untuk analisis mendalam.
+                    """)
 
-            col_input, col_btn = st.columns([7, 1], gap="small")
+            # --- MODIFIKASI LAYOUT: Kolom Input, Mode, dan Tombol Cari sejajar ---
+            col_input, col_mode, col_btn = st.columns([5.5, 1.5, 1], gap="small")
+            
             with col_input:
                 query_aktif = st.text_input(
                     "Pencarian", 
@@ -412,19 +436,30 @@ if st.session_state.local_files:
                     placeholder="Ketik kata dan tekan Enter...", 
                     label_visibility="collapsed"
                 )
+                
+            with col_mode:
+                mode_pencarian = st.selectbox(
+                    "Mode Pencarian", 
+                    ["🔍 Lemmatization (Kata Dasar)", "🧠 Semantic Search (Makna)"], 
+                    label_visibility="collapsed"
+                )
+                
             with col_btn:
                 btn_cari = st.button("Cari", key="btn_search_key", use_container_width=True, type="primary")
-
             if query_aktif:
                 if st.session_state.get('last_query') != query_aktif or btn_cari:
                     with st.spinner("Mencari..."):
                         query_doc = nlp(query_aktif.strip())
-                        query_lemma = query_doc[0].lemma_.lower() if len(query_doc) > 0 else query_aktif.lower()
-                        st.session_state.query_lemma = query_lemma
-                        
                         doc = nlp(teks_bersih[:100000])
-                        matches = [s.text.strip() for s in doc.sents if any(token.lemma_.lower() == query_lemma for token in s)]
                         
+                        if "Lemmatization" in mode_pencarian:
+                            query_lemma = query_doc[0].lemma_.lower() if len(query_doc) > 0 else query_aktif.lower()
+                            st.session_state.query_lemma = query_lemma
+                            matches = [s.text.strip() for s in doc.sents if any(token.lemma_.lower() == query_lemma for token in s)]
+                        else: # Semantic Search
+                            st.session_state.query_lemma = "" 
+                            matches = [s.text.strip() for s in doc.sents if len(s.text.strip()) > 5 and query_doc.similarity(s) >= 0.40]
+
                         st.session_state.search_results = matches
                         st.session_state.current_page = 0
                         st.session_state.last_query = query_aktif
@@ -445,7 +480,7 @@ if st.session_state.local_files:
                     st.session_state.trigger_search = True
                     st.session_state.current_page = 0
 
-            if query_aktif:
+            if query_aktif and "Lemmatization" in mode_pencarian:
                 sinonim_set = set()
                 try:
                     for syn in wordnet.synsets(query_aktif):
@@ -464,32 +499,6 @@ if st.session_state.local_files:
                         st.pills("Saran", saran_kata, key="saran_pills_widget", on_change=aksi_klik_saran, label_visibility="collapsed")
                     except AttributeError:
                         pass
-
-            if btn_cari or st.session_state.trigger_search:
-                st.session_state.trigger_search = False 
-                if st.session_state.teks_pencarian:
-                    query_doc = nlp(st.session_state.teks_pencarian.strip())
-                    query_lemma = query_doc[0].lemma_.lower() if len(query_doc) > 0 else st.session_state.teks_pencarian.lower()
-                    st.session_state.query_lemma = query_lemma
-                    
-                    doc = nlp(teks_bersih[:100000]) 
-                    matches = []
-                    for s in doc.sents:
-                        if any(token.lemma_.lower() == query_lemma for token in s):
-                            matches.append(s.text.strip())
-                
-                    if not matches:
-                        st.warning(f"🔍 **Kata '{st.session_state.teks_pencarian}' tidak ditemukan.**")
-                        st.info("""
-                            **Tips:**
-                            * Pastikan ejaan kata sudah benar.
-                            * Cobalah mencari kata dasar (misal: cari 'run' alih-alih 'running').
-                            * Jika kata tersebut ada di **Daftar Pustaka** atau **Gambar**, ia sengaja disembunyikan dari pencarian ini.
-                        """)
-                        st.session_state.search_results = []
-                    else:
-                        st.session_state.search_results = matches
-                        st.session_state.current_page = 0
 
             if st.session_state.search_results:
                 total_results = len(st.session_state.search_results)
@@ -564,7 +573,20 @@ if st.session_state.local_files:
                             aksi = st.selectbox("Aksi", ["Aksi", "🏷️ POS Tag", "🌐 Trans"], key=f"aksi_{start_idx + i}", label_visibility="collapsed")
 
                         if aksi == "🏷️ POS Tag":
-                            st.markdown(get_colored_pos_text(match), unsafe_allow_html=True)
+                            st.markdown(get_colored_pos_text(match), unsafe_allow_html=True); st.write("")
+                            
+                            tags_di_kalimat = set([token.pos_ for token in doc_match if token.pos_ in deskripsi_pos])
+                            opsi_dropdown = [tag for tag in deskripsi_pos.keys() if tag in tags_di_kalimat]
+                            
+                            if opsi_dropdown:
+                                info_tag = st.selectbox(
+                                    "💡 Penjelasan label pada kalimat ini:", 
+                                    options=opsi_dropdown,
+                                    key=f"help_tab1_{start_idx + i}"
+                                )
+                                st.info(deskripsi_pos[info_tag])
+                            st.write("")
+                        
                         elif aksi == "🌐 Trans":
                             col_lang, col_go = st.columns([7, 3])
                             with col_lang:
@@ -762,7 +784,20 @@ if st.session_state.local_files:
                         
                         if ps_aksi == "🏷️ POS Tag":
                             st.markdown(get_colored_pos_text(match_text), unsafe_allow_html=True)
+                            st.write("---")
+                            
+                            tags_di_kalimat_ps = set([token.pos_ for token in doc_match if token.pos_ in deskripsi_pos])
+                            opsi_dropdown_ps = [tag for tag in deskripsi_pos.keys() if tag in tags_di_kalimat_ps]
+                            
+                            if opsi_dropdown_ps:
+                                ps_info_tag = st.selectbox(
+                                    "💡 Penjelasan label pada kalimat ini:", 
+                                    options=opsi_dropdown_ps,
+                                    key=f"help_tab2_{ps_start + j}"
+                                )
+                                st.info(deskripsi_pos[ps_info_tag])
                             st.write("")
+
                         elif ps_aksi == "🌐 Trans":
                             col_lang, col_go, _ = st.columns([4, 2, 4])
                             with col_lang:
@@ -866,7 +901,19 @@ if st.session_state.local_files:
                 if aksi_ringkasan == "🏷️ POS Tagging":
                     with st.spinner("Membedah struktur kata ringkasan..."):
                         st.markdown(get_colored_pos_text(teks_bersih_untuk_hitung), unsafe_allow_html=True)
+                        st.write("---")
                         
+                        tags_di_ringkasan = set([token.pos_ for token in doc_sum if token.pos_ in deskripsi_pos])
+                        opsi_dropdown_sum = [tag for tag in deskripsi_pos.keys() if tag in tags_di_ringkasan]
+                        
+                        if opsi_dropdown_sum:
+                            sum_info_tag = st.selectbox(
+                                "💡 Penjelasan label pada ringkasan ini:", 
+                                options=opsi_dropdown_sum,
+                                key="help_sum_utama"
+                            )
+                            st.info(deskripsi_pos[sum_info_tag])
+
                 elif aksi_ringkasan == "🌐 Translate":
                     col_lang_sum, col_go_sum, _ = st.columns([2, 1, 5])
                     with col_lang_sum:
@@ -983,6 +1030,7 @@ if st.session_state.local_files:
                         mime=mime_type,
                         type="primary"
                     )
+
             except Exception as e:
                 st.error(f"Gagal menyiapkan file: {e}")
 else:
