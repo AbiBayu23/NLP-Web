@@ -15,6 +15,8 @@ from collections import Counter
 import altair as alt
 import io
 from fpdf import FPDF
+import matplotlib.pyplot as plt
+from wordcloud import WordCloud
 
 # ==========================================
 # 1. KONFIGURASI HALAMAN WEB & TEMA
@@ -132,14 +134,38 @@ def dapatkan_data_visual(teks_terbatas):
     stop_words_spacy = nlp.Defaults.stop_words
     daftar_hitam_kustom = {
         'https', 'http', 'doi', 'et', 'al', 'www', 'com', 'org', 
-        'pdf', 'fig', 'figure', 'table', 'vol', 'pp', 'ieee', 'al',
-        'the', 'and', 'for', 'that'
+        'pdf', 'fig', 'figure', 'table', 'vol', 'pp', 'ieee', 
+        'the', 'and', 'for', 'that', 'using', 'based'
     }
-    words = [w for w in raw_words if len(w) > 2 and w not in stop_words_spacy and w not in daftar_hitam_kustom]
-    word_counts = Counter(words).most_common(15)
-    df_words = pd.DataFrame(word_counts, columns=['Kata', 'Frekuensi']) if word_counts else pd.DataFrame()
     
-    return df_pos, df_words
+    words_all = [w for w in raw_words if len(w) > 2 and w not in stop_words_spacy and w not in daftar_hitam_kustom]
+
+    word_counts = Counter(words_all).most_common()
+    df_words = pd.DataFrame(word_counts, columns=['Kata', 'Frekuensi']) if word_counts else pd.DataFrame()
+    df_cloud = " ".join(words_all)
+    
+    return df_pos, df_words, df_cloud
+
+def hitung_collocation(kata_target, teks_mentah, window=3):
+    # Mengambil semua kata mentah
+    words = re.findall(r'\b[a-z]+(?:-[a-z]+)*\b', teks_mentah.lower())
+    stop_words = nlp.Defaults.stop_words
+    pasangan = []
+    
+    # Mencari kata target dan mengumpulkan kata-kata tetangganya
+    for i, w in enumerate(words):
+        if w == kata_target.lower():
+            start = max(0, i - window)
+            end = min(len(words), i + window + 1)
+            for j in range(start, end):
+                if i != j: # Abaikan kata target itu sendiri
+                    kandidat = words[j]
+                    # Filter kata yang terlalu pendek atau berupa kata sambung (stop words)
+                    if len(kandidat) > 2 and kandidat not in stop_words:
+                        pasangan.append(kandidat)
+                        
+    # Mengembalikan 5 kata yang paling sering berdampingan
+    return Counter(pasangan).most_common(5)
 
 DAFTAR_BAHASA = {
     'Indonesian': 'id', 'English': 'en', 'Spanish': 'es', 
@@ -252,8 +278,30 @@ def bersihkan_teks_untuk_analisis(teks_dokumen):
 # ==========================================
 # 3. UI UPLOAD & MANAJEMEN FILE
 # ==========================================
+# ==========================================
+# 3. UI UPLOAD & MANAJEMEN FILE
+# ==========================================
 st.markdown("<h3 style='color:#0F172A;'>📁 Analisis Dokumen Eksternal</h3>", unsafe_allow_html=True)
-uploaded_files = st.file_uploader("Upload File (PDF, DOCX, TXT)", accept_multiple_files=True, type=['pdf', 'docx', 'txt'])
+
+uploaded_files = st.file_uploader(
+    "Upload File (PDF, DOCX, TXT)", 
+    accept_multiple_files=True, 
+    type=['pdf', 'docx', 'txt'],
+    key="file_uploader_widget"
+)
+
+if st.session_state.local_files:
+    current_uploader_filenames = [f.name for f in uploaded_files] if uploaded_files else []
+    
+    files_to_remove = [f for f in st.session_state.local_files if f not in current_uploader_filenames]
+    
+    for f in files_to_remove:
+        del st.session_state.local_files[f]
+        if f in st.session_state.summary_results:
+            del st.session_state.summary_results[f]
+    
+    if files_to_remove:
+        st.rerun()
 
 if uploaded_files:
     for file in uploaded_files:
@@ -264,89 +312,133 @@ if uploaded_files:
                 pola_kata = r'\b[a-zA-Z0-9]+(?:-[a-zA-Z0-9]+)*\b'
                 semua_kata = re.findall(pola_kata, raw_text.lower())
                 
-                kata_count = len(semua_kata)
-                vocab_dokumen = set(semua_kata)
-                
-                doc_stats = nlp(raw_text[:80000]) 
-                kalimat_count = len(list(doc_stats.sents))
-                
                 st.session_state.local_files[file.name] = {
                     'text': raw_text,
                     'cleaned': teks_bersih,
-                    'vocab': vocab_dokumen, 
-                    'stats': {'k': kalimat_count, 'w': kata_count}
+                    'vocab': set(semua_kata), 
+                    'stats': {
+                        'k': len(list(nlp(raw_text[:80000]).sents)), 
+                        'w': len(semua_kata)
+                    }
                 }
 
 if st.session_state.local_files:
     file_names = list(st.session_state.local_files.keys())
-    col1, col2 = st.columns([8.5, 1.7], gap = "small")
-    with col1: active_file = st.selectbox("Pilih Dokumen Aktif:", file_names)
-    with col2:
-        st.write("")
-        st.write("")
-        if st.button("🗑️ Hapus File", use_container_width=True):
-            del st.session_state.local_files[active_file]
-            st.rerun()
-
-    if active_file in st.session_state.local_files:
-        stats = st.session_state.local_files[active_file]['stats']
-        st.markdown(f"""
-        <div style='background-color:#F0F9FF; border: 1px solid #BAE6FD; padding:12px 20px; border-radius:8px; color:#0284C7; font-weight:600; margin-bottom: 20px;'>
-            ✅ <b>Aktif:</b> {active_file} &nbsp;|&nbsp; 📜 {stats['k']} Kalimat &nbsp;|&nbsp; 🔤 {stats['w']} Kata
-        </div>
-        """, unsafe_allow_html=True)
+    
+    col_sel1, col_sel2 = st.columns([8, 2], vertical_alignment="bottom")
+    
+    with col_sel1:
+        st.markdown("<div style='font-size:14px; font-weight:600; color:#475569; margin-bottom:8px;'>Pilih Dokumen Aktif:</div>", unsafe_allow_html=True)
         
-        teks_dokumen = st.session_state.local_files[active_file]['text']
-        teks_bersih = st.session_state.local_files[active_file]['cleaned']
+        # Logika default jika tombol "Pilih Semua" dicentang
+        is_all = st.session_state.get('pilih_semua_check', False)
+        selected_files = st.multiselect(
+            "Pilih Dokumen Aktif:", 
+            options=file_names, 
+            default=file_names if is_all else [file_names[-1]],
+            key="ms_files",
+            label_visibility="collapsed"
+        )
+    
+    with col_sel2:
+        st.checkbox("Pilih Semua", key="pilih_semua_check")
+
+    if selected_files:
         
         # ==========================================
         # 4. VISUALISASI UTAMA
         # ==========================================
         st.markdown(f"<h3 style='color:#0F172A;'>📊 Gambaran Visual Dokumen</h3>", unsafe_allow_html=True)
-        
+
+        st.markdown("""
+            <style>
+            /* Menambahkan [data-testid="stExpander"] agar efek slider HANYA berlaku di dalam expander visualisasi */
+            [data-testid="stExpander"] [data-testid="stHorizontalBlock"] {
+                flex-wrap: nowrap !important;
+                overflow-x: auto !important; 
+                padding-bottom: 15px;
+            }
+            [data-testid="stExpander"] [data-testid="stHorizontalBlock"] > div {
+                min-width: 600px !important;
+                width: 800px !important;
+                flex: 0 0 auto !important;
+            }
+            </style>
+        """, unsafe_allow_html=True)
+
         with st.expander("Klik di sini untuk Membuka / Menutup Visualisasi Data", expanded=False):
-            with st.spinner("Menyiapkan grafik..."):
-                df_pos, df_words = dapatkan_data_visual(teks_dokumen[:80000])
+            with st.spinner("Menyiapkan perbandingan grafik..."):
+                for fname in selected_files:
+                    st.markdown(f"#### 📄 Laporan: {fname}")
+                    teks_dokumen = st.session_state.local_files[fname]['text']
+                    df_pos, df_words, df_cloud = dapatkan_data_visual(teks_dokumen[:80000])
+                    
+                    col_chart1, col_chart2, col_chart3 = st.columns(3)
                 
-                col_chart1, col_chart2 = st.columns(2)
+                    with col_chart1:
+                        st.caption(f"Statistik Tata Bahasa (**{fname}**)")
+                        if not df_pos.empty:
+                            chart_pos = alt.Chart(df_pos).mark_bar(color="#0284C7", cornerRadiusEnd=4).encode(
+                                y=alt.Y('POS Tag', sort='-x', title='Kelas Kata'), 
+                                x=alt.X('Jumlah Kata', title='Total Jumlah'),
+                                tooltip=['POS Tag', 'Jumlah Kata']
+                            ).properties(height=380, width=800).configure_view(stroke='#94A3B8', strokeWidth=1)
+                            st.altair_chart(chart_pos, use_container_width=True)
+                    
+                    with col_chart2:
+                        st.caption(f"15 Kata Paling Sering Muncul (**{fname}**)")
+                        if not df_words.empty:
+                            teks_mentah_aktif = st.session_state.local_files[fname]['cleaned']
+                            
+                            if 'Pasangan 1' not in df_words.columns:
+                                col1, col2, col3, col4, col5 = [], [], [], [], []
+                                for i, kata in enumerate(df_words['Kata']):
+                                    if i < 8000: 
+                                        hasil_colloc = hitung_collocation(kata, teks_mentah_aktif, window=5)
+                                        col1.append(f"{hasil_colloc[0][0]} ({hasil_colloc[0][1]}x)" if len(hasil_colloc) > 0 else "-")
+                                        col2.append(f"{hasil_colloc[1][0]} ({hasil_colloc[1][1]}x)" if len(hasil_colloc) > 1 else "-")
+                                        col3.append(f"{hasil_colloc[2][0]} ({hasil_colloc[2][1]}x)" if len(hasil_colloc) > 2 else "-")
+                                        col4.append(f"{hasil_colloc[3][0]} ({hasil_colloc[3][1]}x)" if len(hasil_colloc) > 3 else "-")
+                                        col5.append(f"{hasil_colloc[4][0]} ({hasil_colloc[4][1]}x)" if len(hasil_colloc) > 4 else "-")
+                                    else:
+                                        col1.append("-"); col2.append("-"); col3.append("-"); col4.append("-"); col5.append("-")
+                                df_words['Pasangan 1'] = col1; df_words['Pasangan 2'] = col2; df_words['Pasangan 3'] = col3; df_words['Pasangan 4'] = col4; df_words['Pasangan 5'] = col5
+
+                            unik_klik_nama = f"KlikBar_{fname.replace('.','')}"
+                            klik_bar = alt.selection_point(fields=['Kata'], empty=False, name=unik_klik_nama)
+
+                            chart_words = alt.Chart(df_words).transform_window(
+                                rank='row_number()', sort=[alt.SortField("Frekuensi", order="descending")]
+                            ).transform_filter(alt.datum.rank <= 15).mark_bar(color="#059669", cornerRadiusEnd=4).encode(
+                                y=alt.Y('Kata:N', sort='-x', title='Kata Kunci'),
+                                x=alt.X('Frekuensi:Q', title='Jumlah Muncul'),
+                                tooltip=[
+                                    alt.Tooltip('Kata:N'), alt.Tooltip('Frekuensi:Q'),
+                                    alt.Tooltip('Pasangan 1:N', title='🔗 Collocation 1'), 
+                                    alt.Tooltip('Pasangan 2:N', title='🔗 Collocation 2'),
+                                    alt.Tooltip('Pasangan 3:N', title='🔗 Collocation 3'),
+                                    alt.Tooltip('Pasangan 4:N', title='🔗 Collocation 4'),
+                                    alt.Tooltip('Pasangan 5:N', title='🔗 Collocation 5')
+                                ]
+                            ).properties(height=380, width=800).configure_view(stroke='#94A3B8', strokeWidth=1)
+                            
+                            st.altair_chart(chart_words, use_container_width=True)
+
+                    with col_chart3:
+                        st.caption(f"Word Cloud Dokumen (**{fname}**)")
+                        if df_cloud:
+                            wordcloud = WordCloud(width=600, height=280, background_color='white', colormap='viridis', max_words=300).generate(df_cloud[:80000])
+                            fig, ax = plt.subplots(figsize=(8, 5))
+                            ax.imshow(wordcloud, interpolation='bilinear')
+                            ax.axis("off") 
+                            st.pyplot(fig, use_container_width=True)
+
                 
-                with col_chart1:
-                    st.markdown("#### 📌 Statistik Tata Bahasa")
-                    st.caption(f"Jumlah Kelas Kata dominan pada dokumen **{active_file}**")
-                    if not df_pos.empty:
-                        chart_pos = alt.Chart(df_pos).mark_bar(color="#0284C7", cornerRadiusEnd=4).encode(
-                            y=alt.Y('POS Tag', sort='-x', title='Kelas Kata', 
-                                    axis=alt.Axis(labelAngle=0, labelColor='#1E293B', labelFontWeight='normal', titleColor='#0F172A', grid=True, gridColor='#E2E8F0')), 
-                            x=alt.X('Jumlah Kata', title='Total Jumlah', 
-                                    axis=alt.Axis(labelColor='#475569', titleColor='#0F172A', grid=True, gridColor='#CBD5E1', gridDash=[4,4])),
-                            tooltip=['POS Tag', 'Jumlah Kata']
-                        ).properties(height=380).configure_axis(
-                            labelFontSize=13, titleFontSize=14, domainColor='#94A3B8', tickColor='#94A3B8'
-                        ).configure_view(stroke='#94A3B8', strokeWidth=1)
-                        st.altair_chart(chart_pos, use_container_width=True)
-                
-                with col_chart2:
-                    st.markdown("#### 🔤 15 Kata Paling Sering Muncul")
-                    st.caption(f"Kata yang sering mucul dalam dokumen **{active_file}**.")
-                    if not df_words.empty:
-                        chart_words = alt.Chart(df_words).mark_bar(color="#059669", cornerRadiusEnd=4).encode(
-                            y=alt.Y('Kata', sort='-x', title='Kata Kunci', 
-                                    axis=alt.Axis(labelAngle=0, labelColor='#1E293B', labelFontWeight='normal', titleColor='#0F172A', grid=True, gridColor='#E2E8F0')),
-                            x=alt.X('Frekuensi', title='Jumlah Muncul', 
-                                    axis=alt.Axis(labelColor='#475569', titleColor='#0F172A', grid=True, gridColor='#CBD5E1', gridDash=[4,4])),
-                            tooltip=['Kata', 'Frekuensi']
-                        ).properties(height=380).configure_axis(
-                            labelFontSize=13, titleFontSize=14, domainColor='#94A3B8', tickColor='#94A3B8'
-                        ).configure_view(stroke='#94A3B8', strokeWidth=1)
-                        st.altair_chart(chart_words, use_container_width=True)
-        
-        st.write("---") 
-        
         # ==========================================
         # 5. TAB FITUR NLP 
         # ==========================================
-        tab_search, tab_pos_search, tab_summary, tab_transform = st.tabs([
-            "🔍 Keyword Search", "🕵️‍♂️ POS Search", "📝 Summarization", "🔀 Transformasi Dokumen"
+        tab_search, tab_pos_search, tab_summary = st.tabs([
+            "🔍 Search Words", "🕵️‍♂️ Search Grammar", "📝 Summarization"
         ])
         
         def render_result_cards(results, query_lemma, current_page, items_per_page, is_pos_search=False, target_tag=None):
@@ -384,7 +476,7 @@ if st.session_state.local_files:
                     st.markdown(f"""<div style='background:#FFFFFF; padding:20px; border-radius:10px; border:1px solid #E2E8F0; margin-bottom:10px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);'>
                         <div style='color:#334155; font-size:15px; margin-bottom:20px; line-height:1.7;'>{highlighted}</div>
                         <div style='border-top:1px solid #F1F5F9; padding-top:12px; display:flex; justify-content:space-between; align-items:center;'>
-                            <div style='font-size:11px; color:#0284C7; font-weight:bold; background:#F0F9FF; padding:3px 8px; border-radius:4px;'>📄 DOKUMEN: {active_file.upper()}</div>
+                            <div style='font-size:11px; color:#0284C7; font-weight:bold; background:#F0F9FF; padding:3px 8px; border-radius:4px;'>📄 DOKUMEN: {matches_global.upper()}</div>
                             <div>{pills_html}</div>
                         </div></div>""", unsafe_allow_html=True)
                     
@@ -450,17 +542,33 @@ if st.session_state.local_files:
                 if st.session_state.get('last_query') != query_aktif or btn_cari:
                     with st.spinner("Mencari..."):
                         query_doc = nlp(query_aktif.strip())
-                        doc = nlp(teks_bersih[:100000])
+                        matches_global = []
                         
-                        if "Lemmatization" in mode_pencarian:
-                            query_lemma = query_doc[0].lemma_.lower() if len(query_doc) > 0 else query_aktif.lower()
-                            st.session_state.query_lemma = query_lemma
-                            matches = [s.text.strip() for s in doc.sents if any(token.lemma_.lower() == query_lemma for token in s)]
-                        else: # Semantic Search
-                            st.session_state.query_lemma = "" 
-                            matches = [s.text.strip() for s in doc.sents if len(s.text.strip()) > 5 and query_doc.similarity(s) >= 0.40]
+                        # LOOP LINTAS DOKUMEN
+                        for fname in selected_files:
+                            teks_b = st.session_state.local_files[fname]['cleaned']
+                            doc = nlp(teks_b[:100000])
+                            
+                            if "Lemmatization" in mode_pencarian:
+                                query_lemma = query_doc[0].lemma_.lower() if len(query_doc) > 0 else query_aktif.lower()
+                                st.session_state.query_lemma = query_lemma
+                                for s in doc.sents:
+                                    if any(token.lemma_.lower() == query_lemma for token in s):
+                                        matches_global.append({'file': fname, 'text': s.text.strip()})
+                            else: # Semantic Search
+                                st.session_state.query_lemma = "" 
+                                for s in doc.sents:
+                                    if len(s.text.strip()) > 5:
+                                        is_similar = False
+                                        for token in s:
+                                            if not token.is_stop and not token.is_punct and token.has_vector:
+                                                if query_doc.similarity(token) >= 0.60: 
+                                                    is_similar = True
+                                                    break 
+                                        if is_similar:
+                                            matches_global.append({'file': fname, 'text': s.text.strip()})
 
-                        st.session_state.search_results = matches
+                        st.session_state.search_results = matches_global
                         st.session_state.current_page = 0
                         st.session_state.last_query = query_aktif
 
@@ -490,8 +598,13 @@ if st.session_state.local_files:
                                 sinonim_set.add(kata_terkait)
                 except: pass
                 
-                vocab_aktif = st.session_state.local_files[active_file]['vocab']
-                saran_kata = [kata for kata in sinonim_set if kata in vocab_aktif][:8] 
+                # PERBAIKAN: Menggabungkan vocab dari semua file yang dicentang
+                vocab_gabungan = set()
+                for fname in selected_files: 
+                    vocab_gabungan.update(st.session_state.local_files[fname]['vocab'])
+                
+                # Mencocokkan sinonim dengan vocab gabungan
+                saran_kata = [kata for kata in sinonim_set if kata in vocab_gabungan][:8]
                 
                 if saran_kata:
                     st.markdown("<div style='font-size:14px; color:#64748B; margin-bottom:8px;'>💡 Saran kata terkait yang <b>ada di dokumen ini</b>:</div>", unsafe_allow_html=True)
@@ -505,7 +618,7 @@ if st.session_state.local_files:
                 
                 col_info, col_blank, col_filter_text, col_filter_drop = st.columns([5, 1, 3, 1.05], gap="small")
                 with col_info:
-                    st.markdown(f"<div style='color:#059669; font-weight:bold; font-size:14.5px; padding-top:8px;'>✅ Ditemukan {total_results} baris kalimat.</div>", unsafe_allow_html=True)
+                    st.markdown(f"<div style='color:#059669; font-weight:bold; font-size:14.5px; padding-top:8px;'>✅ Ditemukan {total_results} kalimat.</div>", unsafe_allow_html=True)
                 with col_filter_text:
                     st.markdown("<div style='text-align:right; padding-top:8px; font-size:14px; color:#475569; font-weight:00;'>Tampilkan per halaman:</div>", unsafe_allow_html=True)
                 with col_filter_drop:
@@ -531,15 +644,17 @@ if st.session_state.local_files:
 
                 st.write("") 
 
-                for i, match in enumerate(subset_results):
+                for i, match_data in enumerate(subset_results):
+                    match_text = match_data['text']
+                    match_file = match_data['file']
                     with st.container(border=True):
-                        doc_match = nlp(match)
+                        doc_match = nlp(match_text)
                         kata_cocok = set([token.text for token in doc_match if token.lemma_.lower() == st.session_state.query_lemma])
                         if kata_cocok:
                             pola_regex = r"\b(" + "|".join(map(re.escape, kata_cocok)) + r")\b"
-                            highlighted = re.sub(pola_regex, r"<mark style='background:#0EA5E9; color:white; font-weight:bold; padding:0 4px; border-radius:3px;'>\1</mark>", match, flags=re.I)
+                            highlighted = re.sub(pola_regex, r"<mark style='background:#0EA5E9; color:white; font-weight:bold; padding:0 4px; border-radius:3px;'>\1</mark>", match_text, flags=re.I)
                         else:
-                            highlighted = match
+                            highlighted = match_text
                             
                         st.markdown(f"<div style='color:#334155; font-size:15.5px; margin-bottom:15px; line-height:1.6;'>{highlighted}</div>", unsafe_allow_html=True)
                         
@@ -559,7 +674,7 @@ if st.session_state.local_files:
                             gabungan_html = f"""
                             <div style='display:flex; align-items:center; gap:12px; flex-wrap:wrap;'>
                                 <div style='font-size:11px; color:#0284C7; font-weight:bold; background:#F0F9FF; padding:5px 10px; border-radius:4px; border:1px solid #BAE6FD; white-space:nowrap;'>
-                                    📄 {active_file.upper()}
+                                    📄 {match_file.upper()}
                                 </div>
                                 <div style='margin-top:2px;'>
                                     {pills_html}
@@ -573,7 +688,7 @@ if st.session_state.local_files:
                             aksi = st.selectbox("Aksi", ["Aksi", "🏷️ POS Tag", "🌐 Trans"], key=f"aksi_{start_idx + i}", label_visibility="collapsed")
 
                         if aksi == "🏷️ POS Tag":
-                            st.markdown(get_colored_pos_text(match), unsafe_allow_html=True); st.write("")
+                            st.markdown(get_colored_pos_text(match_text), unsafe_allow_html=True); st.write("")
                             
                             tags_di_kalimat = set([token.pos_ for token in doc_match if token.pos_ in deskripsi_pos])
                             opsi_dropdown = [tag for tag in deskripsi_pos.keys() if tag in tags_di_kalimat]
@@ -598,7 +713,7 @@ if st.session_state.local_files:
                                 target_lang_code = DAFTAR_BAHASA[target_lang_name]
                                 with st.spinner("Menerjemahkan..."):
                                     try:
-                                        hasil_terjemahan = GoogleTranslator(source='auto', target=target_lang_code).translate(match)
+                                        hasil_terjemahan = GoogleTranslator(source='auto', target=target_lang_code).translate(match_text)
                                         st.markdown(f"<div style='background:#E0F2FE; border: 1px solid #7DD3FC; padding:15px; color:#0369A1; border-radius:8px; font-size:15px; margin-top:10px; font-weight:500;'>{hasil_terjemahan}</div>", unsafe_allow_html=True)
                                     except Exception as e: 
                                         st.error(f"Error: {e}")
@@ -653,36 +768,30 @@ if st.session_state.local_files:
                 btn_ps_cari = st.button("Cari Presisi", type="primary", use_container_width=True)
 
             if ps_keyword or ps_target_tag != "ALL":
-                current_key = f"{ps_target_tag}_{ps_keyword}_{active_file}"
+                current_key = f"{ps_target_tag}_{ps_keyword}_{len(selected_files)}"
                 
-                if btn_ps_cari or st.session_state.get('last_ps_key') != current_key:
-                    
+                if btn_ps_cari or st.session_state.get('last_ps_key') != current_key:            
                     st.session_state.ps_query = ps_keyword.strip()
                     st.session_state.ps_tag = ps_target_tag
                     
                     with st.spinner("Mencari..."):
-                        q_lemma = ""
-                        if st.session_state.ps_query:
-                            q_doc = nlp(st.session_state.ps_query)
-                            q_lemma = q_doc[0].lemma_.lower() if len(q_doc) > 0 else st.session_state.ps_query.lower()
+                        q_lemma = nlp(st.session_state.ps_query)[0].lemma_.lower() if st.session_state.ps_query else ""
+                        ps_matches_global = []
                         
-                        doc = nlp(teks_bersih[:100000])
-                        ps_matches = []
+                        for fname in selected_files:
+                            doc = nlp(st.session_state.local_files[fname]['cleaned'][:100000])
+                            for s in doc.sents:
+                                match_found = False
+                                for token in s:
+                                    match_kw = (token.lemma_.lower() == q_lemma) if q_lemma else True
+                                    match_pos = (token.pos_ == st.session_state.ps_tag) if st.session_state.ps_tag != "ALL" else True
+                                    if match_kw and match_pos:
+                                        match_found = True
+                                        break
+                                if match_found:
+                                    ps_matches_global.append({'file': fname, 'text': s.text.strip()})
                         
-                        for s in doc.sents:
-                            match_found = False
-                            for token in s:
-                                match_kw = (token.lemma_.lower() == q_lemma) if q_lemma else True
-                                match_pos = (token.pos_ == st.session_state.ps_tag) if st.session_state.ps_tag != "ALL" else True
-                                
-                                if match_kw and match_pos:
-                                    match_found = True
-                                    break
-                            
-                            if match_found:
-                                ps_matches.append(s.text.strip())
-                        
-                        st.session_state.ps_results = ps_matches
+                        st.session_state.ps_results = ps_matches_global
                         st.session_state.ps_current_page = 0
                         st.session_state.last_ps_key = current_key
 
@@ -727,7 +836,9 @@ if st.session_state.local_files:
                 
                 st.write("") 
 
-                for j, match_text in enumerate(ps_subset):
+                for j, match_data in enumerate(ps_subset):
+                    match_text = match_data['text']
+                    match_file = match_data['file']
                     with st.container(border=True):
                         doc_match = nlp(match_text)
                         
@@ -784,7 +895,6 @@ if st.session_state.local_files:
                         
                         if ps_aksi == "🏷️ POS Tag":
                             st.markdown(get_colored_pos_text(match_text), unsafe_allow_html=True)
-                            st.write("---")
                             
                             tags_di_kalimat_ps = set([token.pos_ for token in doc_match if token.pos_ in deskripsi_pos])
                             opsi_dropdown_ps = [tag for tag in deskripsi_pos.keys() if tag in tags_di_kalimat_ps]
@@ -825,6 +935,7 @@ if st.session_state.local_files:
                         st.session_state.ps_current_page += 1; st.rerun()
 
         # --- TAB 3: SUMMARIZATION ---
+        # --- TAB 3: SUMMARIZATION ---
         with tab_summary:
             st.markdown("<h3 style='color:#0F172A;'>📝 Ekstraksi Dokumen Cepat (LexRank)</h3>", unsafe_allow_html=True)
             
@@ -833,87 +944,103 @@ if st.session_state.local_files:
                 **Deskripsi:** Menggunakan algoritma *LexRank* untuk mengekstrak kalimat-kalimat paling penting yang mewakili keseluruhan isi dokumen secara otomatis.
                 
                 **Cara Pakai:**
-                1. Klik tombol **🚀 Mulai Ekstraksi Kilat**.
-                2. Tunggu hingga ringkasan muncul dalam bentuk paragraf.
-                3. Gunakan menu **Aksi** di bawah ringkasan untuk membedah tata bahasa atau menerjemahkannya.
+                1. Pilih dokumen yang ingin diringkas dari *dropdown* di bawah.
+                2. Klik tombol **🚀 Mulai Ekstraksi Kilat**.
+                3. Gunakan menu titik tiga (**⋮**) di pojok kanan hasil untuk Salin atau Download.
                 """)
-            st.caption("Algoritma ini memindai secara cerdas dan menyusun poin-poin paling vital dari file Anda menjadi paragraf yang rapi dan padat.")
+            st.caption("Karena proses peringkasan memakan banyak memori, fitur ini hanya berlaku untuk satu dokumen target yang Anda pilih di bawah ini.")
             
-            if st.button("🚀 Mulai Ekstraksi Kilat", type="primary"):
-                with st.spinner(f"Mengekstrak informasi penting dari dokumen '{active_file}'..."):
+            # Memilih file mana yang mau diringkas
+            target_sum_file = st.selectbox("Pilih dokumen spesifik untuk diringkas:", selected_files, key="sel_sum_file")
+            
+            if st.button(f"🚀 Mulai Ekstraksi Kilat", type="primary"):
+                with st.spinner(f"Mengekstrak informasi penting dari dokumen '{target_sum_file}'..."):
                     try:
-                        total_kalimat_dokumen = stats['k']
-                        target_jumlah_kalimat = max(5, min(int(total_kalimat_dokumen * 0.15), 30))
+                        teks_target = st.session_state.local_files[target_sum_file]['text']
+                        tot_kalimat = st.session_state.local_files[target_sum_file]['stats']['k']
+                        target_jumlah_kalimat = max(5, min(int(tot_kalimat * 0.15), 30))
                         
-                        parser = PlaintextParser.from_string(teks_dokumen, Tokenizer("english"))
+                        parser = PlaintextParser.from_string(teks_target, Tokenizer("english"))
                         summarizer_cepat = LexRankSummarizer()
                         hasil_ekstraksi = summarizer_cepat(parser.document, target_jumlah_kalimat)
                         
                         kalimat_terekstrak = [str(sentence) for sentence in hasil_ekstraksi]
                         
-                        kalimat_per_paragraf = 4
-                        list_paragraf = []
-                        for i in range(0, len(kalimat_terekstrak), kalimat_per_paragraf):
-                            paragraf = " ".join(kalimat_terekstrak[i:i+kalimat_per_paragraf])
-                            list_paragraf.append(paragraf)
-                            
-                        html_ringkasan = "<br><br>".join(list_paragraf)
-                        st.session_state.summary_results[active_file] = html_ringkasan
+                        # Gabungkan kalimat menjadi paragraf untuk tampilan rapi
+                        teks_plain_ringkasan = "\n\n".join(kalimat_terekstrak)
+                        st.session_state.summary_results[target_sum_file] = teks_plain_ringkasan
                         
-                        st.success(f"✅ Ekstraksi selesai! Berhasil merangkum '{active_file}' ({total_kalimat_dokumen} kalimat).")
+                        st.success(f"✅ Ekstraksi selesai!")
                     except Exception as e:
                         st.error(f"Terjadi kesalahan saat mengekstrak: {e}")
 
-            if getattr(st.session_state, 'summary_results', None) and active_file in st.session_state.summary_results:
-                teks_html_ringkasan = st.session_state.summary_results[active_file]
+            # Tampilan Hasil
+            if getattr(st.session_state, 'summary_results', None) and target_sum_file in st.session_state.summary_results:
+                teks_hasil = st.session_state.summary_results[target_sum_file]
                 
-                teks_bersih_untuk_hitung = teks_html_ringkasan.replace("<br><br>", " ")
-                jumlah_kata_sum = len(re.findall(r'\b[a-zA-Z0-9]+(?:-[a-zA-Z0-9]+)*\b', teks_bersih_untuk_hitung))
-                
-                doc_sum = nlp(teks_bersih_untuk_hitung)
-                pos_counts_sum = {'NOUN': 0, 'VERB': 0, 'ADJ': 0, 'PRON': 0, 'ADP': 0, 'PROPN': 0}
-                for token in doc_sum:
-                    if token.pos_ in pos_counts_sum:
-                        pos_counts_sum[token.pos_] += 1
-                
-                st.markdown(f"<h3 style='color:#0F172A; margin-top:30px;'>📑 Hasil Ekstraksi: <b>{active_file}</b></h3>", unsafe_allow_html=True)
-                
-                pills_html_sum = "<div style='display:flex; gap:8px; flex-wrap:wrap; margin-bottom: 15px;'>"
-                pills_html_sum += f"<span style='border:1px solid #0EA5E9; color:#0369A1; border-radius:5px; padding:6px 14px; font-size:13px; font-weight:bold; background-color: #E0F2FE; box-shadow: 0 1px 2px rgba(0,0,0,0.05);'>🔤 Total Kata: {jumlah_kata_sum}</span>"
-                
-                for pos, count in pos_counts_sum.items():
-                    if count > 0:
-                        bg_color = Warna_POS_Utama.get(pos, '#94A3B8')
-                        pills_html_sum += f"<span style='background-color: {bg_color}; color:white; border-radius:5px; padding:5px 12px; font-size:12.5px; font-weight:600; box-shadow: 0 1px 2px rgba(0,0,0,0.1);'>{pos}: {count}</span>"
-                pills_html_sum += "</div>"
-                
-                st.markdown(pills_html_sum, unsafe_allow_html=True)
-                
-                st.markdown(f"""
-                <div style='background-color: #FFFFFF; color: #334155; padding: 30px; border-radius: 12px; font-size: 16px; line-height: 1.8; text-align: justify; border: 1px solid #BAE6FD; margin-bottom: 25px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);'>
-                    {teks_html_ringkasan}
-                </div>
-                """, unsafe_allow_html=True)
-                
-                st.markdown("<h4 style='color:#0F172A;'>🛠️ Aksi pada Hasil Ringkasan</h4>", unsafe_allow_html=True)
-                aksi_ringkasan = st.selectbox("Pilih Aksi:", ["Pilih Aksi...", "🏷️ POS Tagging", "🌐 Translate"], key="aksi_sum_utama")
-                
-                if aksi_ringkasan == "🏷️ POS Tagging":
-                    with st.spinner("Membedah struktur kata ringkasan..."):
-                        st.markdown(get_colored_pos_text(teks_bersih_untuk_hitung), unsafe_allow_html=True)
-                        st.write("---")
-                        
-                        tags_di_ringkasan = set([token.pos_ for token in doc_sum if token.pos_ in deskripsi_pos])
-                        opsi_dropdown_sum = [tag for tag in deskripsi_pos.keys() if tag in tags_di_ringkasan]
-                        
-                        if opsi_dropdown_sum:
-                            sum_info_tag = st.selectbox(
-                                "💡 Penjelasan label pada ringkasan ini:", 
-                                options=opsi_dropdown_sum,
-                                key="help_sum_utama"
-                            )
-                            st.info(deskripsi_pos[sum_info_tag])
+                # Membungkus seluruh konten dalam satu container kartu putih
+                with st.container(border=True):
+                    # Baris Header di dalam Kartu
+                    col_judul, col_aksi = st.columns([0.9, 0.1])
+                    
+                    with col_judul:
+                        st.markdown(f"#### 📑 Ringkasan: {target_sum_file}")
+                        st.caption(f"📊 Estimasi: {len(teks_hasil.split())} kata | 📄 Dokumen: {target_sum_file}")
 
+                    
+                    with col_aksi:
+                        # Popover titik tiga diletakkan di sini agar melayang di pojok kanan atas kartu
+                        with st.popover(""):
+                            st.markdown("**Opsi Export**")
+            
+                            # Download TXT
+                            st.download_button(
+                                "📄 Download TXT", 
+                                data=teks_hasil.encode('utf-8'), 
+                                file_name=f"sum_{target_sum_file}.txt", 
+                                use_container_width=True
+                            )
+                            # Download DOCX
+                            try:
+                                from docx import Document
+                                doc_ex = Document()
+                                doc_ex.add_heading(f"Ringkasan: {target_sum_file}", 0)
+                                
+                                # Memecah teks berdasarkan dua baris baru untuk membuat paragraf asli
+                                paragraf_docx = teks_hasil.split('\n\n')
+                                for p in paragraf_docx:
+                                    if p.strip():
+                                        doc_ex.add_paragraph(p.strip())
+                                
+                                bio_docx = io.BytesIO()
+                                doc_ex.save(bio_docx)
+                                st.download_button(
+                                    "📝 Download DOCX", 
+                                    data=bio_docx.getvalue(), 
+                                    file_name=f"sum_{target_sum_file}.docx", 
+                                    use_container_width=True
+                                )
+                            except: pass
+                            
+
+                    # Garis pemisah halus di dalam kartu
+                    st.markdown("<hr style='margin: 10px 0; opacity: 0.2;'>", unsafe_allow_html=True)
+
+                    # Konten Teks Ringkasan (Gaya bersih, bukan blok kode abu-abu)
+                    st.markdown(f"""
+                    <div style='color: #334155; font-size: 16px; line-height: 1.8; text-align: justify; padding: 10px 5px;'>
+                        {teks_hasil.replace('\n\n', '<br><br>')}
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    
+                # Aksi lanjutan (di luar kartu agar tidak menumpuk)
+                st.write("")
+                aksi_ringkasan = st.selectbox("Analisis Lanjutan:", ["Pilih Aksi...", "🏷️ POS Tagging", "🌐 Translate"], key="aksi_sum_last")
+                if aksi_ringkasan == "🏷️ POS Tagging":
+                    with st.spinner("Membedah struktur kata..."):
+                        st.markdown(get_colored_pos_text(teks_hasil), unsafe_allow_html=True)
+                
                 elif aksi_ringkasan == "🌐 Translate":
                     col_lang_sum, col_go_sum, _ = st.columns([2, 1, 5])
                     with col_lang_sum:
@@ -923,115 +1050,15 @@ if st.session_state.local_files:
                         
                     if go_trans_sum:
                         target_lang_sum_code = DAFTAR_BAHASA[target_lang_sum_name]
-                        with st.spinner(f"Menerjemahkan ringkasan {active_file}..."):
+                        with st.spinner(f"Menerjemahkan..."):
                             try:
-                                teks_terjemah = teks_html_ringkasan.replace("<br><br>", " \n\n ")
-                                hasil_terjemahan_sum = GoogleTranslator(source='auto', target=target_lang_sum_code).translate(teks_terjemah[:4000])
-                                hasil_terjemahan_html = hasil_terjemahan_sum.replace(" \n\n ", "<br><br>")
-                                
+                                res_sum = GoogleTranslator(source='auto', target=target_lang_sum_code).translate(teks_hasil[:4500])
                                 st.markdown(f"""
-                                <div style='background-color: #F0FDF4; color: #065F46; padding: 25px; border-radius: 12px; font-size: 16px; line-height: 1.8; text-align: justify; border: 1px solid #A7F3D0; margin-top: 15px; box-shadow: inset 0 2px 4px 0 rgba(0, 0, 0, 0.03);'>
-                                    {hasil_terjemahan_html}
+                                <div style='background-color: #F0FDF4; color: #065F46; padding: 25px; border-radius: 12px; font-size: 16px; line-height: 1.8; text-align: justify; border: 1px solid #A7F3D0; margin-top: 15px;'>
+                                    {res_sum}
                                 </div>
                                 """, unsafe_allow_html=True)
                             except Exception as e: 
-                                st.error(f"Error: {e}")
-        # --- TAB 4: TRANSFORMASI FILE (TERJEMAH & CONVERT) ---
-        with tab_transform:
-            st.markdown("<h3 style='color:#0F172A;'>🔀 Transformasi & Konversi Dokumen</h3>", unsafe_allow_html=True)
-            st.caption("Menerjemahkan keseluruhan dokumen ini dan mengubahnya ke dalam format TXT, DOCX, atau PDF.")
-            
-            state_key = f"trans_full_{active_file}"
-            if state_key not in st.session_state:
-                st.session_state[state_key] = teks_dokumen
-                st.session_state[f"lang_{active_file}"] = "Original"
-
-            st.markdown("#### 1. Terjemahkan Keseluruhan Dokumen (Opsional)")
-            col_t1, col_t2 = st.columns([3, 1])
-            with col_t1:
-                target_doc_lang = st.selectbox("Pilih Bahasa Tujuan:", ["(Tidak Perlu, Gunakan Teks Asli)"] + list(DAFTAR_BAHASA.keys()), key=f"sel_trans_{active_file}")
-            with col_t2:
-                st.write("")
-                if st.button("🌐 Mulai Terjemahkan", use_container_width=True, type="primary"):
-                    if target_doc_lang != "(Tidak Perlu, Gunakan Teks Asli)":
-                        with st.spinner(f"Menerjemahkan dokumen ke bahasa {target_doc_lang} (Proses ini mungkin memakan waktu beberapa saat)..."):
-                            try:
-                                hasil_full = terjemahkan_teks_panjang(teks_dokumen, DAFTAR_BAHASA[target_doc_lang])
-                                st.session_state[state_key] = hasil_full
-                                st.session_state[f"lang_{active_file}"] = target_doc_lang
-                                st.success("✅ Terjemahan berhasil!")
-                            except Exception as e:
-                                st.error(f"Terjadi kesalahan saat menerjemahkan: {e}")
-                    else:
-                        st.session_state[state_key] = teks_dokumen
-                        st.session_state[f"lang_{active_file}"] = "Original"
-
-            status_bahasa = st.session_state[f"lang_{active_file}"]
-            st.markdown(f"<div style='font-size:14px; font-weight:600; color:#475569; margin-top:15px;'>Preview Teks ({status_bahasa}):</div>", unsafe_allow_html=True)
-            st.text_area("", st.session_state[state_key], height=200, label_visibility="collapsed")
-            
-            st.write("---")
-            
-            st.markdown("#### 2. Konversi Format & Download")
-            st.info("💡 **Catatan untuk PDF:** Jika hasil terjemahan menggunakan huruf non-Latin (seperti Jepang/Korea), karakter mungkin tidak terbaca sempurna di PDF. Disarankan menggunakan DOCX untuk bahasa tersebut.")
-            
-            format_pilihan = st.radio("Pilih Format Output:", ["📄 TXT", "📝 DOCX", "📕 PDF"], horizontal=True)
-            
-            text_to_export = st.session_state[state_key]
-            data_file = None
-            mime_type = ""
-            ekstensi = ""
-            
-            try:
-                if format_pilihan == "📄 TXT":
-                    data_file = text_to_export.encode('utf-8')
-                    mime_type = "text/plain"
-                    ekstensi = "txt"
-                    
-                elif format_pilihan == "📝 DOCX":
-                    doc_export = Document()
-                    paragraf_list = text_to_export.split('\n')
-                    for p in paragraf_list:
-                        if p.strip() == "":
-                            doc_export.add_paragraph() 
-                        else:
-                            doc_export.add_paragraph(p.strip())
-                            
-                    bio = io.BytesIO()
-                    doc_export.save(bio)
-                    data_file = bio.getvalue()
-                    mime_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                    ekstensi = "docx"
-                    
-                elif format_pilihan == "📕 PDF":
-                    pdf = FPDF()
-                    pdf.add_page()
-                    pdf.set_auto_page_break(auto=True, margin=15)
-                    pdf.set_font("Helvetica", size=11)
-                    
-                    paragraf_list = text_to_export.split('\n')
-                    for p in paragraf_list:
-                        p_safe = p.encode('latin-1', 'replace').decode('latin-1').strip()
-                        if p_safe == "":
-                            pdf.ln(4) 
-                        else:
-                            pdf.multi_cell(0, 6, txt=p_safe)
-                            pdf.ln(2)
-                        
-                    data_file = bytes(pdf.output())
-                    mime_type = "application/pdf"
-                    ekstensi = "pdf"
-                    
-                if data_file:
-                    st.download_button(
-                        label=f"⬇️ Download Dokumen (.poly{ekstensi})",
-                        data=data_file,
-                        file_name=f"Hasil_{status_bahasa}_{active_file.split('.')[0]}.{ekstensi}",
-                        mime=mime_type,
-                        type="primary"
-                    )
-
-            except Exception as e:
-                st.error(f"Gagal menyiapkan file: {e}")
+                                st.error(f"Error: {e}") 
 else:
     st.info("👋 Silakan upload file terlebih dahulu untuk mulai menggunakan dashboard.")
