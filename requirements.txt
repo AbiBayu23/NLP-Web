@@ -1,11 +1,14 @@
 streamlit
 PyPDF2
 python-docx
-spacy>=3.8.0
+spacy
 deep-translator
 nltk
 sumy
 pandas
 altair
-fpdf2
+fpdf
+matplotlib
+wordcloud
 en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
+
