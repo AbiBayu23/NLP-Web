@@ -22,8 +22,6 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 import google.generativeai as genai
 
-# Masukkan API Key Anda di sini
-genai.configure(api_key="AIzaSyCUeZt5KYx769PwTsIRnmfHT66Rxpuu994")
 
 
 # ==========================================
@@ -1372,3 +1370,4 @@ if st.session_state.local_files:
         fitur_nlp_dashboard(selected_files)
 else:
     st.info("👋 Silakan upload file terlebih dahulu untuk mulai menggunakan dashboard.")
+
