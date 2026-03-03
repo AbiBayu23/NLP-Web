@@ -372,7 +372,6 @@ def bersihkan_teks_untuk_analisis(teks_dokumen):
 
 st.markdown("<h3 style='color:#0F172A;'>📁 Analisis Dokumen Eksternal</h3>", unsafe_allow_html=True)
 
-# Gunakan session_state untuk mengontrol key uploader agar bisa di-reset
 if "uploader_key" not in st.session_state:
     st.session_state.uploader_key = 0
 
@@ -380,10 +379,9 @@ uploaded_files = st.file_uploader(
     "Upload File (PDF, DOCX, TXT)", 
     accept_multiple_files=True, 
     type=['pdf', 'docx', 'txt'],
-    key=f"uploader_{st.session_state.uploader_key}" # Key dinamis
+    key=f"uploader_{st.session_state.uploader_key}"
 )
 
-# Memproses file baru
 if uploaded_files:
     ada_file_baru = False
     for file in uploaded_files:
@@ -394,7 +392,6 @@ if uploaded_files:
                 pola_kata = r'\b[a-zA-Z0-9]+(?:-[a-zA-Z0-9]+)*\b'
                 semua_kata = re.findall(pola_kata, raw_text.lower())
                 
-                # Simpan ke memori sistem (local_files)
                 st.session_state.local_files[file.name] = {
                     'text': raw_text,
                     'cleaned': teks_bersih,
@@ -406,8 +403,6 @@ if uploaded_files:
                 }
                 ada_file_baru = True
 
-    # TRIK PENTING: Jika ada file baru selesai diproses, 
-    # kita ubah key uploader agar notifikasi upload-nya menghilang secara instan.
     if ada_file_baru:
         st.session_state.uploader_key += 1
         st.rerun()
@@ -429,7 +424,6 @@ if st.session_state.local_files:
         with tab_manage:
             corpus_data = []
             for f_name, f_data in st.session_state.local_files.items():
-                # Mencari file ini masuk ke grup mana saja
                 grup_file = [g for g, files in st.session_state.sub_corpora.items() if f_name in files]
                 
                 corpus_data.append({
@@ -452,12 +446,10 @@ if st.session_state.local_files:
                 hide_index=True, use_container_width=True
             )
             
-            # Tombol Hapus Terpilih
             file_untuk_dihapus = edited_df[edited_df["Hapus"] == True]["Nama File"].tolist()
             if st.button("🗑️ Hapus File Terpilih", type="primary", disabled=not file_untuk_dihapus):
                 for fname in file_untuk_dihapus:
                     del st.session_state.local_files[fname]
-                    # Hapus juga dari semua sub-corpora
                     for g in st.session_state.sub_corpora:
                         if fname in st.session_state.sub_corpora[g]:
                             st.session_state.sub_corpora[g].remove(fname)
@@ -538,16 +530,25 @@ if st.session_state.local_files:
 
             def prev_page_1(): st.session_state.current_page -= 1
             def next_page_1(): st.session_state.current_page += 1
-            def prev_page_2(): st.session_state.ps_current_page -= 1
-            def next_page_2(): st.session_state.ps_current_page += 1
 
-            # Tambahkan tab "🧩 Word Sketch" ke dalam daftar
-            tab_vis, tab_compare, tab_search, tab_sketch, tab_ngram, tab_summary = st.tabs([
-                "📊 Visualisasi", "⚖️ Perbandingan", "🔍 Pencarian Pintar", "🧩 Word Sketch", "🔢 N-Grams", "📝 Ringkasan"
+            tab_vis, tab_compare, tab_search, tab_sketch, tab_summary = st.tabs([
+                "📊 Visualisasi", "⚖️ Perbandingan", "🔍 Pencarian Pintar", "🧩 Word Sketch", "📝 Ringkasan"
             ])
+
+            # ==========================================
+            # TAB 1: VISUALISASI
+            # ==========================================
             with tab_vis:
                 st.markdown(f"<h3 style='color:#0F172A;'>📊 Gambaran Visual Dokumen</h3>", unsafe_allow_html=True)
-
+                
+                with st.expander("📖 Panduan: Cara Membaca Visualisasi"):
+                    st.info("""
+                    **Visualisasi ini memberikan ringkasan statistik dari dokumen Anda dalam satu pandangan:**
+                    * **Statistik Tata Bahasa:** Melihat sebaran kelas kata (Berapa banyak Kata Benda, Kata Kerja, dll).
+                    * **15 Kata Paling Sering Muncul:** Histogram kata kunci terpopuler. *Arahkan kursor (hover)* ke atas batang grafik untuk melihat **🔗 Collocation** (kata-kata yang paling sering berdampingan dengan kata kunci tersebut).
+                    * **Word Cloud:** Representasi visual kata kunci (semakin besar teksnya, semakin sering muncul).
+                    * **Grafik N-Grams (Bigram & Trigram):** Menampilkan *frasa* (gabungan 2 atau 3 kata berurutan) yang paling sering digunakan, berguna untuk menemukan istilah teknis atau idiom.
+                    """)
                 st.markdown("""
                     <style>
                     /* Menambahkan [data-testid="stExpander"] agar efek slider HANYA berlaku di dalam expander visualisasi */
@@ -569,7 +570,6 @@ if st.session_state.local_files:
                         for fname in selected_files:
                             st.markdown(f"#### 📄 Laporan: {fname}")
                             
-                            # --- MULAI BLOK CACHING DATA ---
                             if 'vis_cache' not in st.session_state.local_files[fname]:
                                 with st.spinner(f"Menyiapkan visualisasi, Concordance, dan N-Grams untuk {fname}..."):
                                     teks_dokumen = st.session_state.local_files[fname]['text']
@@ -577,7 +577,6 @@ if st.session_state.local_files:
                                     
                                     teks_mentah_aktif = st.session_state.local_files[fname]['cleaned']
                                     
-                                    # 1. Hitung Concordance (Kolokasi)
                                     if not df_words.empty and 'Pasangan 1' not in df_words.columns:
                                         col1, col2, col3, col4, col5 = [], [], [], [], []
                                         for i, kata in enumerate(df_words['Kata']):
@@ -592,7 +591,6 @@ if st.session_state.local_files:
                                                 col1.append("-"); col2.append("-"); col3.append("-"); col4.append("-"); col5.append("-")
                                         df_words['Pasangan 1'] = col1; df_words['Pasangan 2'] = col2; df_words['Pasangan 3'] = col3; df_words['Pasangan 4'] = col4; df_words['Pasangan 5'] = col5
 
-                                    # 2. Ekstrak N-Grams (Bigram & Trigram)
                                     words_ng = re.findall(r'\b[a-z]{3,}\b', teks_mentah_aktif.lower())
                                     stop_words_ng = nlp.Defaults.stop_words
                                     words_ng = [w for w in words_ng if w not in stop_words_ng]
@@ -603,7 +601,6 @@ if st.session_state.local_files:
                                     df_bigram = pd.DataFrame(Counter(bigrams).most_common(30), columns=['Frasa', 'Frekuensi'])
                                     df_trigram = pd.DataFrame(Counter(trigrams).most_common(30), columns=['Frasa', 'Frekuensi'])
 
-                                    # 3. Word Cloud
                                     cloud_img = None
                                     if df_cloud_text:
                                         fig = get_cached_wordcloud(df_cloud_text[:80000])
@@ -619,12 +616,8 @@ if st.session_state.local_files:
                                         'df_trigram': df_trigram,
                                         'cloud_img': cloud_img
                                     }
-                            # --- SELESAI BLOK CACHING DATA ---
-
-                            # Ambil data dari memory
                             cache_vis = st.session_state.local_files[fname]['vis_cache']
                             
-                            # BARIS 1: Grafik POS, Kata, dan WordCloud
                             col_chart1, col_chart2, col_chart3 = st.columns(3)
                             with col_chart1:
                                 st.caption(f"Statistik Tata Bahasa (**{fname}**)")
@@ -657,9 +650,8 @@ if st.session_state.local_files:
                                 if cache_vis['cloud_img']:
                                     st.image(cache_vis['cloud_img'], use_container_width=True)
 
-                            # BARIS 2: Grafik N-Grams (Bigram & Trigram)
-                            st.write("") # Spacer
-                            col_ng1, col_ng2, col_ng_spacer = st.columns(3) # Menggunakan 3 kolom agar lebarnya seragam dgn yang atas
+                            st.write("")
+                            col_ng1, col_ng2, col_ng_spacer = st.columns(3)
                             
                             with col_ng1:
                                 st.caption(f"15 Frasa 2-Kata / Bigram (**{fname}**)")
@@ -681,10 +673,9 @@ if st.session_state.local_files:
                                     ).properties(height=380, width=800).configure_view(stroke='#94A3B8', strokeWidth=1)
                                     st.altair_chart(ch_tri, use_container_width=True)
 
-                            # TABEL DATA 500 CONCORDANCE
                             if not cache_vis['df_words'].empty:
                                 st.write("") 
-                                with st.expander(f"🗃️ Tampilkan Tabel Data Concordance / Collocation (Top 500 Kata) - {fname}"):
+                                with st.expander(f"🗃️ Tampilkan Tabel Data Concordance / Collocation - {fname}"):
                                     df_tabel_500 = cache_vis['df_words'].head(500)
                                     st.dataframe(df_tabel_500, use_container_width=True, height=300, hide_index=True)
                                     
@@ -693,10 +684,21 @@ if st.session_state.local_files:
                                     
                             st.markdown("<hr style='border: 1px dashed #E2E8F0; margin: 20px 0;'>", unsafe_allow_html=True)
 
+            # ==========================================
+            # TAB 2: PERBANDINGAN DOKUMEN
+            # ==========================================
             with tab_compare:
                 st.markdown("<h3 style='color:#0F172A;'>⚖️ Perbandingan Antar Dokumen</h3>", unsafe_allow_html=True)
-                st.caption("Bandingkan kosakata eksklusif antara dua dokumen untuk melihat perbedaan fokus topik.")
                 
+                with st.expander("📖 Panduan: Cara Menggunakan Fitur Komparasi"):
+                    st.info("""
+                    **Fungsi:** Mengidentifikasi perbedaan fokus topik antara dua dokumen jurnal/paper yang berbeda secara otomatis.
+                    
+                    **Cara Kerja:**
+                    1. Pilih **Dokumen A** dan **Dokumen B**.
+                    2. Sistem akan menghitung **Jaccard Index** (persentase kemiripan total dari seluruh kosakata yang dipakai).
+                    3. Sistem akan mengekstrak daftar **Kata Eksklusif**: Kata-kata spesifik yang HANYA digunakan oleh penulis dokumen A dan tidak pernah disebut di dokumen B (beserta jumlah kemunculannya).
+                    """)
                 if len(st.session_state.local_files) >= 2:
                     with st.container(border=True):
                         col_comp1, col_comp2 = st.columns(2)
@@ -771,16 +773,26 @@ if st.session_state.local_files:
                                         render_unique_words("Dokumen B", count_unik_b, "#FDF4FF", "#FBCFE8", "📙")
                 else:
                     st.info("ℹ️ Anda perlu mengunggah minimal 2 dokumen untuk menggunakan fitur Komparasi Dokumen.")
+            
+            # ==========================================
+            # TAB 3: PENCARIAN PINTAR
+            # ==========================================
             with tab_search:
-                st.markdown("<h3 style='color:#0F172A;'>🔍 Pencarian Pintar</h3>", unsafe_allow_html=True)
-                with st.expander("ℹ️ Tentang Fitur & Cara Pakai"):
+                st.markdown("<h3 style='color:#0F172A;'>🔍 Pencarian Pintar Lanjutan</h3>", unsafe_allow_html=True)
+                
+                with st.expander("📖 Panduan: Penjelasan Tiap Mode Pencarian"):
                     st.info("""
-                        **Deskripsi:** Berbagai mode pencarian tingkat lanjut untuk membedah korpus Anda. Termasuk pencarian berdasarkan kelas kata (POS).
+                        Fitur ini memungkinkan Anda mencari pola kalimat spesifik, bukan sekadar kata biasa (Ctrl+F).
                         
-                        **Fitur Dropdown Aksi (Di Setiap Kalimat):**
-                        * **🏷️ POS Tag:** Membedah kalimat secara instan.
-                        * **🌿 Syntax Tree:** Melihat gambar relasi antar kata (Dependency).
-                        * **🌐 Trans:** Menerjemahkan kalimat terpilih saja.
+                        * **🔍 Lemmatization:** Mencari kata berdasarkan akar katanya. (Mencari *'analyze'* akan memunculkan *'analyzing'*, *'analyzed'*, *'analyzes'*).
+                        * **🧠 Semantic Search:** Mencari kalimat yang memiliki *makna/konsep* mirip dengan kata kunci Anda, meskipun katanya berbeda secara tulisan.
+                        * **🏷️ Entity Search (NER):** Mencari kemunculan entitas spesifik seperti Nama Orang, Nama Organisasi, Lokasi, atau Nominal Uang.
+                        * **📚 POS Search:** Mencari kata berdasarkan jabatan tata bahasanya. (Misal: Cari kata *'record'* hanya jika ia berfungsi sebagai Kata Benda / Noun).
+                        * **🛒 Boolean Search:** Pencarian menggunakan logika (Misal: *machine AND translation NOT neural*).
+                        * **⚙️ Regex Search:** Pencarian menggunakan pola kode. Sangat berguna untuk mencari gaya penulisan tertentu seperti Format Sitasi atau Alamat Email.
+                        * **🌳 Dependency Search:** Mencari sepasang kata yang memiliki hubungan langsung dalam pohon sintaksis kalimat.
+                        
+                        💡 **Aksi Lanjutan:** Pada setiap kalimat yang ditemukan, Anda bisa mengeklik tombol **Aksi** di sebelah kanan untuk membedah *POS Tag*, melihat *Pohon Sintaksis*, atau *Menerjemahkan* kalimat tersebut.
                         """)
 
                 col_mode, col_input, col_btn = st.columns([2.5, 4.5, 1], gap="small")
@@ -811,7 +823,6 @@ if st.session_state.local_files:
                             target_pos_tag = MAP_SEMUA_POS[pos_label]
                         with c_pos2:
                             pos_keyword = st.text_input("Kata Kunci (Opsional):", placeholder="Ketik kata...", key="pos_kw_in", label_visibility="collapsed").strip().lower()
-                        # Trigger unik untuk re-run
                         query_aktif = f"POS_{target_pos_tag}_{pos_keyword}"
                         
                     elif "Dependency" in mode_pencarian:
@@ -839,7 +850,6 @@ if st.session_state.local_files:
                         st.markdown("<div style='margin-top: 2px;'></div>", unsafe_allow_html=True)
                     btn_cari = st.button("Cari", key="btn_search_key", use_container_width=True, type="primary")
 
-                # State Inits
                 if 'teks_pencarian' not in st.session_state: st.session_state.teks_pencarian = ""
                 if 'search_results' not in st.session_state: st.session_state.search_results = []
                 if 'current_page' not in st.session_state: st.session_state.current_page = 0
@@ -857,7 +867,6 @@ if st.session_state.local_files:
                                 teks_b = st.session_state.local_files[fname]['cleaned']
                                 doc = nlp(teks_b[:100000])
                                 
-                                # Logika Khusus POS Search Baru
                                 if "POS Search" in mode_pencarian:
                                     for s in doc.sents:
                                         match_found = False
@@ -877,7 +886,6 @@ if st.session_state.local_files:
                                             p_html = "<div style='display:flex; gap:5px; flex-wrap:wrap;'>" + "".join([f"<span style='background-color: {Warna_POS_Utama.get(p, '#94A3B8')}; color:white; border-radius:4px; padding:3px 8px; font-size:11px; font-weight:600;'>{p}: {c}</span>" for p, c in p_counts.items()]) + "</div>"
                                             matches_global.append({'file': fname, 'text': s.text.strip(), 'html': highlighted, 'pills': p_html, 'tags': list(set([t.pos_ for t in s if t.pos_ in deskripsi_pos]))})
                                             
-                                # Mode Lainnya Tetap Sama
                                 elif "NER" in mode_pencarian:
                                     target_ent = query_aktif.split(" ")[0]
                                     for s in doc.sents:
@@ -962,7 +970,6 @@ if st.session_state.local_files:
                             st.session_state.current_page = 0
                             st.session_state.last_query = query_aktif
 
-                # UI Display Hasil Search
                 if not st.session_state.search_results and query_aktif and st.session_state.last_query == query_aktif:
                     st.warning(f"🔍 Pencarian '{query_aktif}' tidak ditemukan.")
 
@@ -1014,43 +1021,22 @@ if st.session_state.local_files:
                     c_pi.markdown(f"<div style='text-align:center; padding-top:8px;'>Halaman: <b>{st.session_state.current_page + 1} / {tot_pages}</b></div>", unsafe_allow_html=True)
                     c_n.button("Next ➡️", use_container_width=True, disabled=(st.session_state.current_page >= tot_pages - 1), on_click=next_page_1)
 
-            with tab_ngram:
-                st.markdown("<h3 style='color:#0F172A;'>🔢 Analisis Frasa (N-Grams)</h3>", unsafe_allow_html=True)
-                c_ng1, c_ng2 = st.columns([2, 5])
-                with c_ng1:
-                    t_ng = st.radio("Tipe N-Gram:", ["Bigram (2 Kata)", "Trigram (3 Kata)"])
-                    n_val = 2 if "Bigram" in t_ng else 3
-                    top_n = st.slider("Tampilkan Top:", 5, 30, 15)
-                
-                with c_ng2:
-                    t_gabung_ng = " ".join([st.session_state.local_files[f]['cleaned'] for f in selected_files])
-                    if t_gabung_ng:
-                        with st.spinner(f"Mengekstrak {t_ng}..."):
-                            w_ng = [w for w in re.findall(r'\b[a-z]{3,}\b', t_gabung_ng.lower()) if w not in nlp.Defaults.stop_words]
-                            ng_list = [" ".join(g) for g in zip(*[w_ng[i:] for i in range(n_val)])]
-                            c_ng = Counter(ng_list).most_common(top_n)
-                            
-                            if c_ng:
-                                df_ng = pd.DataFrame(c_ng, columns=['Frasa', 'Frekuensi'])
-                                ch_ng = alt.Chart(df_ng).mark_bar(color="#8B5CF6", cornerRadiusEnd=4).encode(y=alt.Y('Frasa:N', sort='-x'), x='Frekuensi:Q', tooltip=['Frasa', 'Frekuensi']).properties(height=400)
-                                st.altair_chart(ch_ng, use_container_width=True)
-                            else: st.warning("Kata tidak cukup.")
-            # --- TAB 3: SUMMARIZATION ---
+            # ==========================================
+            # TAB 5: RINGKASAN
+            # ==========================================
             with tab_summary:
                 st.markdown("<h3 style='color:#0F172A;'>📝 Ekstraksi Dokumen Cepat (LexRank)</h3>", unsafe_allow_html=True)
                 
-                with st.expander("ℹ️ Tentang Fitur & Cara Pakai"):
+                with st.expander("📖 Panduan: Cara Menggunakan Summarization"):
                     st.info("""
-                    **Deskripsi:** Menggunakan algoritma *LexRank* untuk mengekstrak kalimat-kalimat paling penting yang mewakili keseluruhan isi dokumen secara otomatis.
+                    **Deskripsi:** Fitur ini menggunakan algoritma NLP murni (LexRank - tanpa API eksternal) untuk membaca seluruh isi dokumen Anda dan mengekstrak 10-30 kalimat yang paling krusial dan mewakili seluruh isi teks (Extractive Summarization).
                     
                     **Cara Pakai:**
-                    1. Pilih dokumen yang ingin diringkas dari *dropdown* di bawah.
-                    2. Klik tombol **🚀 Mulai Ekstraksi Kilat**.
-                    3. Gunakan menu titik tiga (**⋮**) di pojok kanan hasil untuk Salin atau Download.
+                    1. Pilih HANYA SATU dokumen target dari dropdown.
+                    2. Klik tombol Ekstraksi.
+                    3. Anda bisa menggunakan tombol **(⋮)** di pojok kanan hasil untuk mendownload ringkasan tersebut ke dalam bentuk `.txt` atau MS Word `.docx`.
                     """)
-                st.caption("Karena proses peringkasan memakan banyak memori, fitur ini hanya berlaku untuk satu dokumen target yang Anda pilih di bawah ini.")
-                
-                # Memilih file mana yang mau diringkas
+
                 target_sum_file = st.selectbox("Pilih dokumen spesifik untuk diringkas:", selected_files, key="sel_sum_file")
                 
                 if st.button(f"🚀 Mulai Ekstraksi Kilat", type="primary"):
@@ -1066,7 +1052,6 @@ if st.session_state.local_files:
                             
                             kalimat_terekstrak = [str(sentence) for sentence in hasil_ekstraksi]
                             
-                            # Gabungkan kalimat menjadi paragraf untuk tampilan rapi
                             teks_plain_ringkasan = "\n\n".join(kalimat_terekstrak)
                             st.session_state.summary_results[target_sum_file] = teks_plain_ringkasan
                             
@@ -1074,13 +1059,10 @@ if st.session_state.local_files:
                         except Exception as e:
                             st.error(f"Terjadi kesalahan saat mengekstrak: {e}")
 
-                # Tampilan Hasil
                 if getattr(st.session_state, 'summary_results', None) and target_sum_file in st.session_state.summary_results:
                     teks_hasil = st.session_state.summary_results[target_sum_file]
                     
-                    # Membungkus seluruh konten dalam satu container kartu putih
                     with st.container(border=True):
-                        # Baris Header di dalam Kartu
                         col_judul, col_aksi = st.columns([0.9, 0.1])
                         
                         with col_judul:
@@ -1204,7 +1186,6 @@ if st.session_state.local_files:
                             render_clickable_list("🏃‍♂️ Sbg Subjek", hasil_ws["🏃‍♂️ Sebagai Subjek (Melakukan)"], "#EFF6FF", "subj")
                         with c_obj:
                             render_clickable_list("🎯 Sbg Objek", hasil_ws["🎯 Sebagai Objek (Dikenai)"], "#FEF2F2", "obj")
-
 
         fitur_nlp_dashboard(selected_files)
 else:
