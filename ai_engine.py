@@ -58,32 +58,45 @@ def koreksi_pos_id(doc):
     return doc
 
 # --- FUNGSI LOAD NLP ---
+import spacy
+import stanza
+import spacy_stanza
+
 @st.cache_resource
 def load_ai_model(lang_code):
     model_name = SPACY_MODELS.get(lang_code, 'en_core_web_sm') 
+    
+    # --- LOGIKA UNTUK BAHASA INDONESIA (STANZA) ---
     if model_name == 'stanza':
-        import spacy_stanza
         try:
+            # Coba load pipeline
             nlp_model = spacy_stanza.load_pipeline('id', processors='tokenize,pos,lemma,depparse')
-            if "koreksi_pos_id" not in nlp_model.pipe_names:
-                nlp_model.add_pipe("koreksi_pos_id", last=True)
-            return nlp_model
         except Exception:
-            from spacy.lang.id import Indonesian
-            return Indonesian()
+            # Jika gagal (belum ada di server), download dulu secara otomatis
+            with st.spinner("📥 Sedang mengunduh model bahasa Indonesia (Stanza)..."):
+                stanza.download('id')
+            nlp_model = spacy_stanza.load_pipeline('id', processors='tokenize,pos,lemma,depparse')
             
+        if "koreksi_pos_id" not in nlp_model.pipe_names:
+            nlp_model.add_pipe("koreksi_pos_id", last=True)
+        return nlp_model
+            
+    # --- LOGIKA UNTUK BAHASA INGGRIS / LAINNYA (SPACY) ---
     try:
         nlp_model = spacy.load(model_name)
     except Exception:
-        from spacy.lang.en import English
-        nlp_model = English()
-        nlp_model.add_pipe("sentencizer")
+        # Jika model spacy belum ada, unduh via spacy cli
+        with st.spinner(f"📥 Sedang mengunduh model {model_name}..."):
+            spacy.cli.download(model_name)
+        nlp_model = spacy.load(model_name)
         
+    # Tambahkan komponen tambahan
     if "merge_hyphens" not in nlp_model.pipe_names:
         if "tagger" in nlp_model.pipe_names:
             nlp_model.add_pipe("merge_hyphens", before="tagger")
         else:
             nlp_model.add_pipe("merge_hyphens")
+            
     return nlp_model
 
 # --- FUNGSI LOAD AUDIO WHISPER ---
@@ -130,4 +143,5 @@ def hasilkan_insight_gemini(jaccard_sim, cosine_sim, top3_a, top3_b):
     4. Dok B fokus: {', '.join(top3_b)}
     """
     respons_genai = model_ai.generate_content(prompt_instruksi)
+
     return respons_genai.text, target_model_name.replace('models/', '')
