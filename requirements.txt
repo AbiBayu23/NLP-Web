@@ -18,5 +18,6 @@ openpyxl
 openai-whisper
 python-docx
 PyPDF2
-pyaudioop
+audioop-lts
+
 
