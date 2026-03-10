@@ -19,5 +19,6 @@ openai-whisper
 python-docx
 PyPDF2
 audioop-lts
+google-generativeai
 
 
