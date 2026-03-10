@@ -22,6 +22,12 @@ import numpy.core.multiarray
 import tempfile
 import time
 from pydub import AudioSegment
+import streamlit as st
+import pandas as pd
+from bs4 import BeautifulSoup
+import re
+import io
+import time
 
 from ai_engine import (
     load_ai_model, 
@@ -40,6 +46,97 @@ def _patched_load(*args, **kwargs):
     kwargs['weights_only'] = False
     return _original_load(*args, **kwargs)
 torch.load = _patched_load
+
+def natural_sort_key(s):
+    return [int(text) if text.isdigit() else text.lower() for text in re.split('([0-9]+)', s)]
+
+def clean_duplicated_start(source, target):
+    s = source.strip()
+    t = target.strip()
+    if s.lower() == t.lower():
+        return t   
+    words = s.split()
+    if not words:
+        return t
+    pattern_str = r'\s+'.join(re.escape(w) for w in words)
+    pattern = re.compile(r'^\s*' + pattern_str + r'\s*', re.IGNORECASE)
+    
+    if pattern.search(t):
+        cleaned = pattern.sub('', t, count=1).strip()
+        cleaned = re.sub(r'^[:,\-]\s*', '', cleaned)
+        if cleaned:
+            return cleaned   
+    return t
+
+def process_eaf_ultra_clean(eaf_content):
+    """
+    Fungsi ini menerima teks string XML (hasil decode dari Streamlit) 
+    dan mengembalikan Pandas DataFrame.
+    """
+    soup = BeautifulSoup(eaf_content, 'xml')
+
+    parent_dict = {}
+    for align in soup.find_all('ALIGNABLE_ANNOTATION'):
+        p_id = align.get('ANNOTATION_ID')
+        val = align.find('ANNOTATION_VALUE')
+        if p_id and val:
+            parent_dict[p_id] = val.text.strip()
+
+    tier_data = {}
+    for tier in soup.find_all('TIER'):
+        t_id = tier.get('TIER_ID', '')
+        tier_data[t_id] = {}
+        for ref in tier.find_all('REF_ANNOTATION'):
+            ref_id = ref.get('ANNOTATION_REF')
+            val = ref.find('ANNOTATION_VALUE')
+            if ref_id and val:
+                word = val.text.strip()
+                if ref_id in tier_data[t_id]:
+                    tier_data[t_id][ref_id] = (tier_data[t_id][ref_id] + " " + word).replace("  ", " ")
+                else:
+                    tier_data[t_id][ref_id] = word
+
+    rows = []
+    for p_id, full_source in parent_dict.items():
+        raw_targets = []
+        catatan_texts = []
+        for t_id, ref_dict in tier_data.items():
+            if p_id not in ref_dict: continue
+            text_val = ref_dict[p_id].strip()
+            if "-note" in t_id.lower():
+                catatan_texts.append(text_val)
+            else:
+                raw_targets.append(text_val)
+                
+        norm_source = re.sub(r'\s+', ' ', full_source.strip().lower())
+        has_real_translation = any(re.sub(r'\s+', ' ', t.strip().lower()) != norm_source for t in raw_targets)
+
+        filtered_targets = []
+        for t in raw_targets:
+            t_norm = re.sub(r'\s+', ' ', t.strip().lower())
+            if t_norm == norm_source and has_real_translation:
+                continue
+            cleaned_t = clean_duplicated_start(full_source, t)
+            if cleaned_t and cleaned_t not in filtered_targets:
+                filtered_targets.append(cleaned_t)
+
+        target_text = " ".join(filtered_targets).strip()
+        target_text = clean_duplicated_start(full_source, target_text)
+        catatan_text = " | ".join(catatan_texts).strip()
+
+        if target_text or catatan_text:
+            rows.append({
+                "ID_Unit": p_id,
+                "Source_Sentence": full_source,
+                "Target_Sentence": target_text,
+                "Catatan": catatan_text
+            })
+
+    rows.sort(key=lambda x: natural_sort_key(x['ID_Unit']))
+
+    if rows:
+        return pd.DataFrame(rows)
+    return None
 
 # ==========================================
 # 1. KONFIGURASI HALAMAN WEB & TEMA
@@ -97,6 +194,7 @@ st.markdown("""
     </div>
 """, unsafe_allow_html=True)
 
+# Menangani Notifikasi 10 Detik
 if 'notif_msg' in st.session_state and 'notif_time' in st.session_state:
     if time.time() - st.session_state.notif_time < 10:
         st.success(st.session_state.notif_msg, icon="✅")
@@ -226,7 +324,7 @@ def render_dependency_tree(text, nlp_model):
     return full_html
 
 def buat_word_sketch(kata_target, teks_mentah, nlp_model):
-    doc = nlp_model(teks_mentah[:100000]) 
+    doc = nlp_model(teks_mentah[:15000]) 
     target_lemma = kata_target.lower()
     
     modifiers = []
@@ -774,6 +872,14 @@ def render_tab_visual(docs_terpilih, suffix=""):
             with col_vis_kiri: render_visualisasi_sisi(docs_to_visualize[0], "#0EA5E9", "#38BDF8")
             with col_vis_kanan: render_visualisasi_sisi(docs_to_visualize[1], "#D946EF", "#E879F9")
 
+import html
+import math
+import re
+from collections import Counter
+import pandas as pd
+import streamlit as st
+import altair as alt
+
 @st.fragment
 def render_tab_search(docs_terpilih):
     def prev_page_1(): st.session_state.current_page -= 1
@@ -783,7 +889,8 @@ def render_tab_search(docs_terpilih):
     st.markdown("<h3 style='color:#0F172A;'>🔍 Pencarian Pintar & Pemrofilan Kata</h3>", unsafe_allow_html=True)
     with st.expander("📖 Panduan: Penjelasan Tiap Mode Pencarian"):
         st.info("""
-            * **🔍 Lemmatization:** Mencari kata berdasarkan akar katanya.
+            * **🔍 Lemmatization:** Mencari kata berdasarkan akar katanya (Tampilan KWIC).
+            * **🔗 Collocation (Asosiasi Korpus):** Ekstraksi teman sanding kata dengan skor PMI.
             * **🔬 Morphology Search:** Menemukan variasi bentuk imbuhan.
             * **🧠 Semantic Search:** Mencari makna mirip.
             * **🧩 Word Sketch:** Bagaimana kata dikelilingi kata lain.
@@ -797,7 +904,7 @@ def render_tab_search(docs_terpilih):
     col_mode, col_input, col_btn = st.columns([2.5, 4.5, 1], gap="small")
     with col_mode:
         mode_pencarian = st.selectbox("Mode Pencarian", [
-            "🔍 Lemmatization", "🔬 Morphology Search (Variasi Kata)", "🧠 Semantic Search", "🧩 Word Sketch (Profil Kata)", 
+            "🔍 Lemmatization", "🔗 Collocation (Asosiasi Korpus)", "🔬 Morphology Search (Variasi Kata)", "🧠 Semantic Search", "🧩 Word Sketch (Profil Kata)", 
             "🏷️ Entity Search (NER)", "📚 POS Search (Kelas Kata)", "🛒 Boolean Search", "⚙️ Regex Search", "🌳 Dependency Search"
         ], label_visibility="collapsed")
         
@@ -835,7 +942,12 @@ def render_tab_search(docs_terpilih):
             pilihan_regex = st.selectbox("Pilih Pola Regex", list(opsi_regex.keys()), label_visibility="collapsed")
             if pilihan_regex == "✏️ Ketik Manual...": query_aktif = st.text_input("Ketik pola Regex", placeholder="Contoh: \\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}\\b", label_visibility="collapsed")
             else: query_aktif = opsi_regex[pilihan_regex]
-        
+            
+        elif "Collocation" in mode_pencarian:
+            c_col1, c_col2 = st.columns([3, 1])
+            with c_col1: query_aktif = st.text_input("Ketik Kata Pusat (Node):", placeholder="Ketik kata...", key="in_colloc", label_visibility="collapsed").strip().lower()
+            with c_col2: window_size = st.selectbox("Rentang Jarak (±)", [3, 4, 5, 8, 10], index=1, label_visibility="collapsed")
+
         elif "Word Sketch" in mode_pencarian: query_aktif = st.text_input("Ketik kata untuk diprofilkan:", placeholder="Contoh: model, data...", key="in_word_sketch", label_visibility="collapsed").strip().lower()
         elif "Semantic" in mode_pencarian: query_aktif = st.text_input("Ketik konsep makna", placeholder="Ketik kata...", key="in_semantic", label_visibility="collapsed").strip()
         elif "Lemmatization" in mode_pencarian: query_aktif = st.text_input("Ketik kata dasar", placeholder="Ketik kata...", key="in_lemma", label_visibility="collapsed").strip()
@@ -848,6 +960,7 @@ def render_tab_search(docs_terpilih):
     if 'search_results' not in st.session_state: st.session_state.search_results = []
     if 'morph_results' not in st.session_state: st.session_state.morph_results = pd.DataFrame()
     if 'sketch_results' not in st.session_state: st.session_state.sketch_results = {}
+    if 'colloc_results' not in st.session_state: st.session_state.colloc_results = pd.DataFrame()
     if 'current_page' not in st.session_state: st.session_state.current_page = 0
     if 'last_query' not in st.session_state: st.session_state.last_query = ""
 
@@ -860,6 +973,7 @@ def render_tab_search(docs_terpilih):
             elif "Semantic" in mode_pencarian: st.session_state["in_semantic"] = pilihan
             elif "Lemmatization" in mode_pencarian: st.session_state["in_lemma"] = pilihan
             elif "Morphology" in mode_pencarian: st.session_state["in_morph"] = pilihan
+            elif "Collocation" in mode_pencarian: st.session_state["in_colloc"] = pilihan
             else: st.session_state["teks_pencarian"] = pilihan
 
     if query_aktif:
@@ -868,158 +982,224 @@ def render_tab_search(docs_terpilih):
             lang_query = st.session_state.local_files[docs_terpilih[0]]['lang'] if docs_terpilih else 'en'
             nlp_query = load_ai_model(lang_query)
             
-            if "Morphology" in mode_pencarian:
-                with st.spinner(f"Menganalisis variasi morfologi..."):
-                    try:
-                        target_lemma = nlp_query(query_aktif)[0].lemma_.lower()
-                        morph_data = []
-                        for fname in docs_terpilih: 
-                            teks_mentah = str(st.session_state.local_files[fname]['cleaned'])
-                            doc = get_cached_spacy_doc(teks_mentah[:100000], st.session_state.local_files[fname]['lang'])
-                            for token in doc:
-                                if token.lemma_.lower() == target_lemma and not token.is_punct and not token.is_space:
-                                    morph_data.append({"Bentuk Teks Asli": token.text.lower(), "Kelas Kata (POS)": token.pos_, "Struktur Morfologi": str(token.morph) if str(token.morph) else "Bentuk Dasar (Base)"})
-                        if morph_data:
-                            st.session_state.morph_results = pd.DataFrame(morph_data).groupby(['Bentuk Teks Asli', 'Kelas Kata (POS)', 'Struktur Morfologi']).size().reset_index(name='Frekuensi Muncul').sort_values('Frekuensi Muncul', ascending=False).reset_index(drop=True)
-                        else: st.session_state.morph_results = pd.DataFrame()
-                        st.session_state.search_results, st.session_state.sketch_results, st.session_state.last_query = [], {}, query_aktif
-                    except Exception as e: st.error(f"Error: {e}")
+            if "Collocation" in mode_pencarian:
+                try:
+                    node_word = query_aktif.lower()
+                    freq_node = 0
+                    freq_collocate = Counter()
+                    freq_cooc = Counter()
+                    total_words = 0
+                    
+                    for fname in docs_terpilih:
+                        doc = get_cached_spacy_doc(st.session_state.local_files[fname]['cleaned'][:100000], st.session_state.local_files[fname]['lang'])
+                        tokens = [t.text.lower() for t in doc if not t.is_punct and not t.is_space]
+                        total_words += len(tokens)
+                        
+                        for i, token in enumerate(tokens):
+                            freq_collocate[token] += 1
+                            if token == node_word:
+                                freq_node += 1
+                                start = max(0, i - window_size)
+                                end = min(len(tokens), i + window_size + 1)
+                                for j in range(start, end):
+                                    if i != j: 
+                                        freq_cooc[tokens[j]] += 1
+                    
+                    colloc_data = []
+                    if freq_node > 0:
+                        for col_word, f_co in freq_cooc.items():
+                            if f_co >= 2: # Hanya tampilkan jika muncul minimal 2 kali
+                                f_col = freq_collocate[col_word]
+                                pmi = math.log2((f_co * total_words) / (freq_node * f_col))
+                                colloc_data.append({
+                                    "Kata Sanding (Collocate)": col_word,
+                                    "Frekuensi Bersama": f_co,
+                                    "Frekuensi Total (Korpus)": f_col,
+                                    "Skor Asosiasi (PMI)": round(pmi, 3)
+                                })
+                        
+                        df_colloc = pd.DataFrame(colloc_data)
+                        if not df_colloc.empty:
+                            df_colloc = df_colloc.sort_values(by="Skor Asosiasi (PMI)", ascending=False).reset_index(drop=True)
+                        st.session_state.colloc_results = df_colloc
+                    else:
+                        st.session_state.colloc_results = pd.DataFrame()
+                        
+                    st.session_state.search_results, st.session_state.sketch_results, st.session_state.morph_results = [], {}, pd.DataFrame()
+                    st.session_state.last_query = query_aktif
+                except Exception as e: st.error(f"Error: {e}")
+
+            elif "Morphology" in mode_pencarian:
+                try:
+                    target_lemma = nlp_query(query_aktif)[0].lemma_.lower()
+                    morph_data = []
+                    for fname in docs_terpilih: 
+                        teks_mentah = str(st.session_state.local_files[fname]['cleaned'])
+                        doc = get_cached_spacy_doc(teks_mentah[:100000], st.session_state.local_files[fname]['lang'])
+                        for token in doc:
+                            if token.lemma_.lower() == target_lemma and not token.is_punct and not token.is_space:
+                                morph_data.append({"Bentuk Teks Asli": token.text.lower(), "Kelas Kata (POS)": token.pos_, "Struktur Morfologi": str(token.morph) if str(token.morph) else "Bentuk Dasar (Base)"})
+                    if morph_data:
+                        st.session_state.morph_results = pd.DataFrame(morph_data).groupby(['Bentuk Teks Asli', 'Kelas Kata (POS)', 'Struktur Morfologi']).size().reset_index(name='Frekuensi Muncul').sort_values('Frekuensi Muncul', ascending=False).reset_index(drop=True)
+                    else: st.session_state.morph_results = pd.DataFrame()
+                    st.session_state.search_results, st.session_state.sketch_results, st.session_state.colloc_results, st.session_state.last_query = [], {}, pd.DataFrame(), query_aktif
+                except Exception as e: st.error(f"Error: {e}")
                     
             elif "Word Sketch" in mode_pencarian:
-                with st.spinner(f"Membangun profil tata bahasa..."):
-                    try:
-                        st.session_state.sketch_results = buat_word_sketch(query_aktif, " ".join([st.session_state.local_files[f]['cleaned'] for f in docs_terpilih]), nlp_query)
-                        st.session_state.search_results, st.session_state.morph_results, st.session_state.last_query = [], pd.DataFrame(), query_aktif
-                    except Exception as e: st.error(f"Error: {e}")
+                try:
+                    st.session_state.sketch_results = buat_word_sketch(query_aktif, " ".join([st.session_state.local_files[f]['cleaned'] for f in docs_terpilih]), nlp_query)
+                    st.session_state.search_results, st.session_state.morph_results, st.session_state.colloc_results, st.session_state.last_query = [], pd.DataFrame(), pd.DataFrame(), query_aktif
+                except Exception as e: st.error(f"Error: {e}")
             
             else:
-                with st.spinner("Mencari Struktur Kalimat..."):
-                    matches_global = []
-                    if "Lemmatization" in mode_pencarian or "Semantic" in mode_pencarian: query_doc = nlp_query(query_aktif)
+                matches_global = []
+                if "Lemmatization" in mode_pencarian or "Semantic" in mode_pencarian: query_doc = nlp_query(query_aktif)
+                
+                for fname in docs_terpilih: 
+                    doc = get_cached_spacy_doc(st.session_state.local_files[fname]['cleaned'][:100000], st.session_state.local_files[fname]['lang'])
                     
-                    for fname in docs_terpilih: 
-                        doc = get_cached_spacy_doc(st.session_state.local_files[fname]['cleaned'][:100000], st.session_state.local_files[fname]['lang'])
-                        
-                        if "POS Search" in mode_pencarian:
+                    if "POS Search" in mode_pencarian:
+                        for s in doc.sents:
+                            match_found, highlighted = False, ""
+                            for token in s:
+                                if (not pos_keyword or token.lemma_.lower() == pos_keyword) and (target_pos_tag == "ALL" or token.pos_ == target_pos_tag) and (pos_keyword or target_pos_tag != "ALL"):
+                                    match_found = True; highlighted += f"<mark style='background:#0EA5E9; color:white; font-weight:bold; padding:0 4px; border-radius:4px;'>{token.text}</mark>{token.whitespace_}"
+                                else: highlighted += f"{token.text}{token.whitespace_}"
+                            if match_found:
+                                p_html = "<div style='display:flex; gap:5px; flex-wrap:wrap;'>" + "".join([f"<span style='background-color: {Warna_POS_Utama.get(p, '#94A3B8')}; color:white; border-radius:4px; padding:3px 8px; font-size:11px; font-weight:600;'>{p}: {c}</span>" for p, c in Counter([t.pos_ for t in s if t.pos_ not in ['SPACE', 'PUNCT', 'SYM', 'X']]).items()]) + "</div>"
+                                matches_global.append({'file': fname, 'text': s.text.strip(), 'html': highlighted, 'pills': p_html, 'tags': list(set([t.pos_ for t in s if t.pos_ in deskripsi_pos]))})
+                                
+                    elif "NER" in mode_pencarian:
+                        target_ent = query_aktif.split(" ")[0]
+                        for s in doc.sents:
+                            if any(ent.label_ == target_ent for ent in s.ents):
+                                m_text = s.text.strip()
+                                p_html = "<div style='display:flex; gap:5px; flex-wrap:wrap;'>" + "".join([f"<span style='background-color: {Warna_POS_Utama.get(p, '#94A3B8')}; color:white; border-radius:4px; padding:3px 8px; font-size:11px; font-weight:600;'>{p}: {c}</span>" for p, c in Counter([t.pos_ for t in s if t.pos_ not in ['SPACE', 'PUNCT', 'SYM', 'X']]).items()]) + "</div>"
+                                matches_global.append({'file': fname, 'text': m_text, 'html': get_colored_ner_inline(load_ai_model(st.session_state.local_files[fname]['lang']), m_text, target_ent), 'pills': p_html, 'tags': list(set([t.pos_ for t in s if t.pos_ in deskripsi_pos]))})
+                    
+                    elif "Dependency" in mode_pencarian:
+                        if head_word != "" or child_word != "":
                             for s in doc.sents:
-                                match_found, highlighted = False, ""
+                                match_found, highlighted = False, s.text.strip()
                                 for token in s:
-                                    if (not pos_keyword or token.lemma_.lower() == pos_keyword) and (target_pos_tag == "ALL" or token.pos_ == target_pos_tag) and (pos_keyword or target_pos_tag != "ALL"):
-                                        match_found = True; highlighted += f"<mark style='background:#0EA5E9; color:white; font-weight:bold; padding:0 4px; border-radius:4px;'>{token.text}</mark>{token.whitespace_}"
-                                    else: highlighted += f"{token.text}{token.whitespace_}"
+                                    if token.dep_ == rel_type or (rel_type == "obj" and token.dep_ == "dobj"):
+                                        if (head_word == "" or token.head.lemma_.lower() == head_word) and (child_word == "" or token.lemma_.lower() == child_word):
+                                            match_found = True
+                                            if head_word != "": highlighted = re.sub(f"\\b({token.head.text})\\b", r"<mark style='background:#F59E0B; color:white; padding:0 4px; border-radius:3px;'>\1</mark>", highlighted, flags=re.I)
+                                            if child_word != "": highlighted = re.sub(f"\\b({token.text})\\b", r"<mark style='background:#0EA5E9; color:white; padding:0 4px; border-radius:3px;'>\1</mark>", highlighted, flags=re.I)
+                                            break
                                 if match_found:
                                     p_html = "<div style='display:flex; gap:5px; flex-wrap:wrap;'>" + "".join([f"<span style='background-color: {Warna_POS_Utama.get(p, '#94A3B8')}; color:white; border-radius:4px; padding:3px 8px; font-size:11px; font-weight:600;'>{p}: {c}</span>" for p, c in Counter([t.pos_ for t in s if t.pos_ not in ['SPACE', 'PUNCT', 'SYM', 'X']]).items()]) + "</div>"
                                     matches_global.append({'file': fname, 'text': s.text.strip(), 'html': highlighted, 'pills': p_html, 'tags': list(set([t.pos_ for t in s if t.pos_ in deskripsi_pos]))})
+                    
+                    elif "Regex" in mode_pencarian:
+                        try:
+                            pola_regex = re.compile(query_aktif)
+                            sents = re.split(r'(?<=[.!?]) +', st.session_state.local_files[fname]['cleaned'][:100000])
+                            for m_text in sents:
+                                m_text = m_text.strip()
+                                if pola_regex.search(m_text):
+                                    matches_global.append({'file': fname, 'text': m_text, 'html': pola_regex.sub(r"<mark style='background:#F59E0B; color:white; padding:0 4px; border-radius:3px;'>\g<0></mark>", m_text), 'pills': "", 'tags': []})
+                        except: pass
+
+                    elif "Lemmatization" in mode_pencarian:
+                        q_l = query_doc[0].lemma_.lower() if len(query_doc) > 0 else query_aktif.lower()
+                        for s in doc.sents:
+                            matches = [t for t in s if t.lemma_.lower() == q_l]
+                            if matches:
+                                for t in matches:
+                                    idx_in_sent = t.idx - s.start_char
+                                    left_context = html.escape(s.text[:idx_in_sent].strip())
+                                    keyword = html.escape(t.text)
+                                    right_context = html.escape(s.text[idx_in_sent + len(t.text):].strip())
                                     
-                        elif "NER" in mode_pencarian:
-                            target_ent = query_aktif.split(" ")[0]
-                            for s in doc.sents:
-                                if any(ent.label_ == target_ent for ent in s.ents):
-                                    m_text = s.text.strip()
-                                    p_html = "<div style='display:flex; gap:5px; flex-wrap:wrap;'>" + "".join([f"<span style='background-color: {Warna_POS_Utama.get(p, '#94A3B8')}; color:white; border-radius:4px; padding:3px 8px; font-size:11px; font-weight:600;'>{p}: {c}</span>" for p, c in Counter([t.pos_ for t in s if t.pos_ not in ['SPACE', 'PUNCT', 'SYM', 'X']]).items()]) + "</div>"
-                                    matches_global.append({'file': fname, 'text': m_text, 'html': get_colored_ner_inline(load_ai_model(st.session_state.local_files[fname]['lang']), m_text, target_ent), 'pills': p_html, 'tags': list(set([t.pos_ for t in s if t.pos_ in deskripsi_pos]))})
-                        
-                        elif "Dependency" in mode_pencarian:
-                            if head_word != "" or child_word != "":
-                                for s in doc.sents:
-                                    match_found, highlighted = False, s.text.strip()
-                                    for token in s:
-                                        if token.dep_ == rel_type or (rel_type == "obj" and token.dep_ == "dobj"):
-                                            if (head_word == "" or token.head.lemma_.lower() == head_word) and (child_word == "" or token.lemma_.lower() == child_word):
-                                                match_found = True
-                                                if head_word != "": highlighted = re.sub(f"\\b({token.head.text})\\b", r"<mark style='background:#F59E0B; color:white; padding:0 4px; border-radius:3px;'>\1</mark>", highlighted, flags=re.I)
-                                                if child_word != "": highlighted = re.sub(f"\\b({token.text})\\b", r"<mark style='background:#0EA5E9; color:white; padding:0 4px; border-radius:3px;'>\1</mark>", highlighted, flags=re.I)
-                                                break
-                                    if match_found:
-                                        p_html = "<div style='display:flex; gap:5px; flex-wrap:wrap;'>" + "".join([f"<span style='background-color: {Warna_POS_Utama.get(p, '#94A3B8')}; color:white; border-radius:4px; padding:3px 8px; font-size:11px; font-weight:600;'>{p}: {c}</span>" for p, c in Counter([t.pos_ for t in s if t.pos_ not in ['SPACE', 'PUNCT', 'SYM', 'X']]).items()]) + "</div>"
-                                        matches_global.append({'file': fname, 'text': s.text.strip(), 'html': highlighted, 'pills': p_html, 'tags': list(set([t.pos_ for t in s if t.pos_ in deskripsi_pos]))})
-                        
-                        elif "Regex" in mode_pencarian:
-                            try:
-                                pola_regex = re.compile(query_aktif)
-                                sents = re.split(r'(?<=[.!?]) +', st.session_state.local_files[fname]['cleaned'][:100000])
-                                for m_text in sents:
-                                    m_text = m_text.strip()
-                                    if pola_regex.search(m_text):
-                                        matches_global.append({'file': fname, 'text': m_text, 'html': pola_regex.sub(r"<mark style='background:#F59E0B; color:white; padding:0 4px; border-radius:3px;'>\g<0></mark>", m_text), 'pills': "", 'tags': []})
-                            except: pass
+                                    h_light = (
+                                        "<div style='display:flex; justify-content:center; align-items:center; width:100%; "
+                                        "font-family:\"Times New Roman\", Times, serif; font-size:16px; padding:10px 0; border-bottom:1px solid #E2E8F0;'>"
+                                        f"<div style='flex: 1 1 0%; min-width: 0; text-align:right; padding-right:15px; color:#475569; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;'>{left_context}</div>"
+                                        f"<div style='width:140px; text-align:center; flex:none; background:#0EA5E9; color:white; padding:2px 8px; border-radius:4px; font-weight:bold; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;'>{keyword}</div>"
+                                        f"<div style='flex: 1 1 0%; min-width: 0; text-align:left; padding-left:15px; color:#475569; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;'>{right_context}</div>"
+                                        "</div>"
+                                    )
+                                    
+                                    matches_global.append({'file': fname, 'text': s.text.strip(), 'html': h_light, 'pills': "", 'tags': []})
+                    
+                    elif "Semantic" in mode_pencarian:
+                        lang_query_wn = st.session_state.local_files[docs_terpilih[0]]['lang'] if docs_terpilih else 'en'
+                        sinonim_query = dapatkan_sinonim(query_aktif, lang_query_wn)
 
-                        elif "Lemmatization" in mode_pencarian:
-                            q_l = query_doc[0].lemma_.lower() if len(query_doc) > 0 else query_aktif.lower()
-                            for s in doc.sents:
-                                if any(t.lemma_.lower() == q_l for t in s):
-                                    m_text, k_c = s.text.strip(), set([t.text for t in s if t.lemma_.lower() == q_l])
-                                    h_light = re.sub(r"\b(" + "|".join(map(re.escape, k_c)) + r")\b", r"<mark style='background:#0EA5E9; color:white; padding:0 4px; border-radius:3px;'>\1</mark>", m_text, flags=re.I) if k_c else m_text
-                                    p_html = "<div style='display:flex; gap:5px; flex-wrap:wrap;'>" + "".join([f"<span style='background-color: {Warna_POS_Utama.get(p, '#94A3B8')}; color:white; border-radius:4px; padding:3px 8px; font-size:11px; font-weight:600;'>{p}: {c}</span>" for p, c in Counter([t.pos_ for t in s if t.pos_ not in ['SPACE', 'PUNCT', 'SYM', 'X']]).items()]) + "</div>"
-                                    matches_global.append({'file': fname, 'text': m_text, 'html': h_light, 'pills': p_html, 'tags': list(set([t.pos_ for t in s if t.pos_ in deskripsi_pos]))})
-                        
-                        elif "Semantic" in mode_pencarian:
-                            lang_query_wn = st.session_state.local_files[docs_terpilih[0]]['lang'] if docs_terpilih else 'en'
-                            sinonim_query = dapatkan_sinonim(query_aktif, lang_query_wn)
-
-                            for s in doc.sents:
-                                if len(s.text.strip()) > 5:
-                                    is_sim = False
-                                    if any(t.lemma_.lower() in sinonim_query for t in s):
+                        for s in doc.sents:
+                            if len(s.text.strip()) > 5:
+                                is_sim = False
+                                if any(t.lemma_.lower() in sinonim_query for t in s):
+                                    is_sim = True
+                                elif len(query_doc) > 0 and query_doc.has_vector:
+                                    if s.has_vector and query_doc.similarity(s) >= 0.7:
                                         is_sim = True
-                                    elif len(query_doc) > 0 and query_doc.has_vector:
-                                        if s.has_vector and query_doc.similarity(s) >= 0.45:
+                                    else:
+                                        if any(not t.is_stop and not t.is_punct and t.has_vector and query_doc.similarity(t) >= 0.55 for t in s):
                                             is_sim = True
-                                        else:
-                                            if any(not t.is_stop and not t.is_punct and t.has_vector and query_doc.similarity(t) >= 0.55 for t in s):
-                                                is_sim = True
-                                                
-                                    if is_sim:
-                                        p_html = "<div style='display:flex; gap:5px; flex-wrap:wrap;'>" + "".join([f"<span style='background-color: {Warna_POS_Utama.get(p, '#94A3B8')}; color:white; border-radius:4px; padding:3px 8px; font-size:11px; font-weight:600;'>{p}: {c}</span>" for p, c in Counter([t.pos_ for t in s if t.pos_ not in ['SPACE', 'PUNCT', 'SYM', 'X']]).items()]) + "</div>"
-                                        h_light = s.text.strip()
-                                        for kata_sim in sinonim_query:
-                                            h_light = re.sub(f"\\b({kata_sim})\\b", r"<mark style='background:#FDE047; padding:0 4px; border-radius:3px; color:#0F172A;'>\1</mark>", h_light, flags=re.I)
-                                        matches_global.append({'file': fname, 'text': s.text.strip(), 'html': h_light, 'pills': p_html, 'tags': list(set([t.pos_ for t in s if t.pos_ in deskripsi_pos]))})
-                                        
-                        elif "Boolean" in mode_pencarian:
-                            q_r = query_aktif.replace("AND", "&").replace("OR", "|").replace("NOT", "!")
-                            for s in doc.sents:
-                                lems = {t.lemma_.lower() for t in s}
-                                nlp_aktif = load_ai_model(st.session_state.local_files[fname]['lang'])
-                                if (" & " in q_r and all(nlp_aktif(p.strip())[0].lemma_.lower() in lems for p in q_r.split("&"))) or (" | " in q_r and any(nlp_aktif(p.strip())[0].lemma_.lower() in lems for p in q_r.split("|"))) or ("!" in q_r and nlp_aktif(q_r.replace("!", "").strip())[0].lemma_.lower() not in lems) or (query_aktif.lower() in lems):
-                                    h_light = s.text.strip()
-                                    for w in re.findall(r'\w+', query_aktif):
-                                        if w.upper() not in ["AND", "OR", "NOT"]: h_light = re.sub(f"\\b({w})\\b", r"<mark style='background:#FDE047; color:#0F172A; padding:0 4px; border-radius:3px;'>\1</mark>", h_light, flags=re.I)
+                                            
+                                if is_sim:
                                     p_html = "<div style='display:flex; gap:5px; flex-wrap:wrap;'>" + "".join([f"<span style='background-color: {Warna_POS_Utama.get(p, '#94A3B8')}; color:white; border-radius:4px; padding:3px 8px; font-size:11px; font-weight:600;'>{p}: {c}</span>" for p, c in Counter([t.pos_ for t in s if t.pos_ not in ['SPACE', 'PUNCT', 'SYM', 'X']]).items()]) + "</div>"
+                                    h_light = s.text.strip()
+                                    for kata_sim in sinonim_query:
+                                        h_light = re.sub(f"\\b({kata_sim})\\b", r"<mark style='background:#FDE047; padding:0 4px; border-radius:3px; color:#0F172A;'>\1</mark>", h_light, flags=re.I)
                                     matches_global.append({'file': fname, 'text': s.text.strip(), 'html': h_light, 'pills': p_html, 'tags': list(set([t.pos_ for t in s if t.pos_ in deskripsi_pos]))})
+                                    
+                    elif "Boolean" in mode_pencarian:
+                        q_r = query_aktif.replace("AND", "&").replace("OR", "|").replace("NOT", "!")
+                        for s in doc.sents:
+                            lems = {t.lemma_.lower() for t in s}
+                            nlp_aktif = load_ai_model(st.session_state.local_files[fname]['lang'])
+                            if (" & " in q_r and all(nlp_aktif(p.strip())[0].lemma_.lower() in lems for p in q_r.split("&"))) or (" | " in q_r and any(nlp_aktif(p.strip())[0].lemma_.lower() in lems for p in q_r.split("|"))) or ("!" in q_r and nlp_aktif(q_r.replace("!", "").strip())[0].lemma_.lower() not in lems) or (query_aktif.lower() in lems):
+                                h_light = s.text.strip()
+                                for w in re.findall(r'\w+', query_aktif):
+                                    if w.upper() not in ["AND", "OR", "NOT"]: h_light = re.sub(f"\\b({w})\\b", r"<mark style='background:#FDE047; color:#0F172A; padding:0 4px; border-radius:3px;'>\1</mark>", h_light, flags=re.I)
+                                p_html = "<div style='display:flex; gap:5px; flex-wrap:wrap;'>" + "".join([f"<span style='background-color: {Warna_POS_Utama.get(p, '#94A3B8')}; color:white; border-radius:4px; padding:3px 8px; font-size:11px; font-weight:600;'>{p}: {c}</span>" for p, c in Counter([t.pos_ for t in s if t.pos_ not in ['SPACE', 'PUNCT', 'SYM', 'X']]).items()]) + "</div>"
+                                matches_global.append({'file': fname, 'text': s.text.strip(), 'html': h_light, 'pills': p_html, 'tags': list(set([t.pos_ for t in s if t.pos_ in deskripsi_pos]))})
 
-                    st.session_state.search_results, st.session_state.sketch_results, st.session_state.morph_results = matches_global, {}, pd.DataFrame()
-                    st.session_state.current_page, st.session_state.last_query = 0, query_aktif
+                st.session_state.search_results, st.session_state.sketch_results, st.session_state.morph_results, st.session_state.colloc_results = matches_global, {}, pd.DataFrame(), pd.DataFrame()
+                st.session_state.current_page, st.session_state.last_query = 0, query_aktif
 
-    mode_saran_aktif = ["Lemmatization", "Semantic", "Word Sketch", "Morphology"]
-    if st.session_state.get('search_results') and any(m in mode_pencarian for m in mode_saran_aktif):
-        query_pencarian = st.session_state.get('last_query', "").strip()
-        if query_pencarian:
-            lang_saran = st.session_state.local_files[docs_terpilih[0]]['lang'] if docs_terpilih else 'en'
-            sinonim_set = dapatkan_sinonim(query_pencarian, lang_saran)
+    mode_saran_aktif = ["Lemmatization", "Semantic", "Word Sketch", "Morphology", "Collocation"]
+    if st.session_state.get('search_results') or st.session_state.get('colloc_results') is not None:
+        if any(m in mode_pencarian for m in mode_saran_aktif):
+            query_pencarian = st.session_state.get('last_query', "").strip()
+            if query_pencarian:
+                lang_saran = st.session_state.local_files[docs_terpilih[0]]['lang'] if docs_terpilih else 'en'
+                sinonim_set = dapatkan_sinonim(query_pencarian, lang_saran)
 
-            vocab_aktif = set()
-            try:
-                import nltk
-                from nltk.corpus import wordnet
-                wn_lang_saran = 'ind' if st.session_state.local_files[docs_terpilih[0]]['lang'] == 'id' else 'eng'
-                for syn in wordnet.synsets(query_pencarian, lang=wn_lang_saran):
-                    for l in syn.lemmas(lang=wn_lang_saran):
-                        kata_terkait = l.name().lower()
-                        if kata_terkait != query_pencarian.lower() and '_' not in kata_terkait:
-                            sinonim_set.add(kata_terkait)
-            except: pass
+                vocab_aktif = set()
+                try:
+                    import nltk
+                    from nltk.corpus import wordnet
+                    wn_lang_saran = 'ind' if st.session_state.local_files[docs_terpilih[0]]['lang'] == 'id' else 'eng'
+                    for syn in wordnet.synsets(query_pencarian, lang=wn_lang_saran):
+                        for l in syn.lemmas(lang=wn_lang_saran):
+                            kata_terkait = l.name().lower()
+                            if kata_terkait != query_pencarian.lower() and '_' not in kata_terkait:
+                                sinonim_set.add(kata_terkait)
+                except: pass
 
-            vocab_aktif = set()
-            for doc_name in docs_terpilih:
-                vocab_aktif.update(st.session_state.local_files[doc_name]['vocab'])
-            saran_kata = [kata for kata in sinonim_set if kata in vocab_aktif][:8] 
-            if saran_kata:
-                st.markdown("<div style='font-size:14px; color:#64748B; margin-bottom:8px;'>💡 Saran kata terkait yang <b>ada di dokumen ini</b>:</div>", unsafe_allow_html=True)
-                try: st.pills("Saran", saran_kata, key="saran_pills_widget", on_change=aksi_klik_saran, label_visibility="collapsed")
-                except AttributeError: pass
+                for doc_name in docs_terpilih:
+                    vocab_aktif.update(st.session_state.local_files[doc_name]['vocab'])
+                saran_kata = [kata for kata in sinonim_set if kata in vocab_aktif][:8] 
+                if saran_kata:
+                    st.markdown("<div style='font-size:14px; color:#64748B; margin-bottom:8px;'>💡 Saran kata terkait yang <b>ada di dokumen ini</b>:</div>", unsafe_allow_html=True)
+                    try: st.pills("Saran", saran_kata, key="saran_pills_widget", on_change=aksi_klik_saran, label_visibility="collapsed")
+                    except AttributeError: pass
 
-    if "Word Sketch" in mode_pencarian:
+    # TAMPILAN HASIL
+    if "Collocation" in mode_pencarian:
+        if not st.session_state.colloc_results.empty:
+            df_c = st.session_state.colloc_results
+            st.success(f"✅ Ditemukan **{len(df_c)}** kata sanding (collocates) untuk **'{query_aktif}'**.")
+            st.dataframe(df_c, use_container_width=True, hide_index=True)
+        elif query_aktif and st.session_state.last_query == query_aktif: 
+            st.warning(f"🔍 Kata '{query_aktif}' tidak ditemukan atau tidak memiliki asosiasi kuat di dokumen yang dipilih.")
+
+    elif "Word Sketch" in mode_pencarian:
         if st.session_state.sketch_results:
             st.write(f"### 🔍 Hasil Profil untuk: **{query_aktif}**")
             c_mod, c_subj, c_obj = st.columns(3)
@@ -1047,8 +1227,14 @@ def render_tab_search(docs_terpilih):
 
         if st.session_state.search_results:
             tot_res = len(st.session_state.search_results)
-            c_i, _, c_ft, c_fd = st.columns([5, 1, 3, 1.05], gap="small")
-            c_i.markdown(f"<div style='color:#059669; font-weight:bold; padding-top:8px;'>✅ Ditemukan {tot_res} kalimat.</div>", unsafe_allow_html=True)
+            
+            if "Lemmatization" in mode_pencarian:
+                c_i, _, c_ft, c_fd = st.columns([5, 1, 3, 1.05], gap="small")
+                c_i.markdown(f"<div style='color:#059669; font-weight:bold; padding-top:8px;'>✅ Ditemukan {tot_res} baris KWIC.</div>", unsafe_allow_html=True)
+            else:
+                c_i, _, c_ft, c_fd = st.columns([5, 1, 3, 1.05], gap="small")
+                c_i.markdown(f"<div style='color:#059669; font-weight:bold; padding-top:8px;'>✅ Ditemukan {tot_res} kalimat.</div>", unsafe_allow_html=True)
+
             c_ft.markdown("<div style='text-align:right; padding-top:8px;'>Tampilkan per halaman:</div>", unsafe_allow_html=True)
             limit_sel = c_fd.selectbox("Limit", [str(x) for x in [5, 10, 25, 50] if x < tot_res] + [f"All ({tot_res})"], label_visibility="collapsed")
             
@@ -1057,42 +1243,45 @@ def render_tab_search(docs_terpilih):
             if st.session_state.current_page >= tot_pages: st.session_state.current_page = max(0, tot_pages - 1)
             
             s_idx = st.session_state.current_page * IP_PAGE
-            for i, m_data in enumerate(st.session_state.search_results[s_idx:s_idx+IP_PAGE]):
-                with st.container(border=True):
-                    jml_kata = len(re.findall(r'\b\w+\b', m_data['text']))
-                    html_aman = m_data['html'].replace('\n', ' ')
-                    
-                    st.markdown(f"""
-<div style='color:#334155; font-size:15.5px; margin-bottom:15px; line-height:1.6;'>
-{html_aman}
-</div>
-<div style='display:flex; justify-content:space-between; align-items:center; border-top:1px solid #F1F5F9; padding-top:12px;'>
-<div style='display:flex; align-items:center; gap:10px; flex-wrap:wrap;'>
-<div style='font-size:11px; color:#0284C7; font-weight:bold; background:#F0F9FF; padding:4px 8px; border-radius:4px; border:1px solid #BAE6FD;'>
-📄 {m_data['file'].upper()}
-</div>
-<div style='font-size:11px; color:#059669; font-weight:bold; background:#ECFDF5; padding:4px 8px; border-radius:4px; border:1px solid #A7F3D0;'>
-🔢 {jml_kata} Kata
-</div>
-<div>{m_data['pills']}</div>
-</div>
-</div>
-""", unsafe_allow_html=True)
-                    
-                    _, c_ak = st.columns([8, 2])
-                    aksi = c_ak.selectbox("Aksi", ["Aksi", "🏷️ POS Tag", "🌿 Syntax Tree", "🌐 Trans"], key=f"aksi_{s_idx+i}", label_visibility="collapsed")
+            
+            if "Lemmatization" in mode_pencarian:
+                gabungan_kwic = "<div style='width:100%; border: 1px solid #E2E8F0; border-radius:8px; background:white;'>"
+                for m_data in st.session_state.search_results[s_idx:s_idx+IP_PAGE]:
+                    gabungan_kwic += m_data['html']
+                gabungan_kwic += "</div>"
+                
+                st.markdown(gabungan_kwic, unsafe_allow_html=True)
+                
+            else:
+                for i, m_data in enumerate(st.session_state.search_results[s_idx:s_idx+IP_PAGE]):
+                    with st.container(border=True):
+                        html_aman = m_data['html'].replace('\n', ' ')
+                        jml_kata = len(re.findall(r'\b\w+\b', m_data['text']))
+                        
+                        st.markdown(
+                            f"<div style='color:#334155; font-size:15.5px; margin-bottom:15px; line-height:1.6;'>{html_aman}</div>"
+                            f"<div style='display:flex; justify-content:space-between; align-items:center; border-top:1px solid #F1F5F9; padding-top:12px;'>"
+                            f"<div style='display:flex; align-items:center; gap:10px; flex-wrap:wrap;'>"
+                            f"<div style='font-size:11px; color:#0284C7; font-weight:bold; background:#F0F9FF; padding:4px 8px; border-radius:4px; border:1px solid #BAE6FD;'>📄 {m_data['file'].upper()}</div>"
+                            f"<div style='font-size:11px; color:#059669; font-weight:bold; background:#ECFDF5; padding:4px 8px; border-radius:4px; border:1px solid #A7F3D0;'>🔢 {jml_kata} Kata</div>"
+                            f"<div>{m_data['pills']}</div>"
+                            f"</div></div>", 
+                            unsafe_allow_html=True
+                        )
+                        
+                        _, c_ak = st.columns([8, 2])
+                        aksi = c_ak.selectbox("Aksi", ["Aksi", "🏷️ POS Tag", "🌿 Syntax Tree", "🌐 Trans"], key=f"aksi_{s_idx+i}", label_visibility="collapsed")
 
-                    if aksi == "🏷️ POS Tag":
-                        st.markdown(get_colored_pos_text(load_ai_model(st.session_state.local_files[m_data['file']]['lang']), m_data['text']), unsafe_allow_html=True)
-                        o_drop = [t for t in deskripsi_pos.keys() if t in m_data['tags']]
-                        if o_drop: st.info(deskripsi_pos[st.selectbox("💡 Penjelasan:", o_drop, key=f"hp_{s_idx+i}")])
-                    elif aksi == "🌿 Syntax Tree":
-                        with st.spinner("Membedah struktur..."): st.markdown(render_dependency_tree(m_data['text'], load_ai_model(st.session_state.local_files[m_data['file']]['lang'])), unsafe_allow_html=True)
-                    elif aksi == "🌐 Trans":
-                        c_l, c_g = st.columns([7, 3])
-                        tl_name = c_l.selectbox("Ke:", list(DAFTAR_BAHASA.keys()), key=f"ln_{s_idx+i}", label_visibility="collapsed")
-                        if c_g.button("Ok", key=f"g_{s_idx+i}", use_container_width=True):
-                            with st.spinner("Menerjemahkan..."):
+                        if aksi == "🏷️ POS Tag":
+                            st.markdown(get_colored_pos_text(load_ai_model(st.session_state.local_files[m_data['file']]['lang']), m_data['text']), unsafe_allow_html=True)
+                            o_drop = [t for t in deskripsi_pos.keys() if t in m_data['tags']]
+                            if o_drop: st.info(deskripsi_pos[st.selectbox("💡 Penjelasan:", o_drop, key=f"hp_{s_idx+i}")])
+                        elif aksi == "🌿 Syntax Tree":
+                            st.markdown(render_dependency_tree(m_data['text'], load_ai_model(st.session_state.local_files[m_data['file']]['lang'])), unsafe_allow_html=True)
+                        elif aksi == "🌐 Trans":
+                            c_l, c_g = st.columns([7, 3])
+                            tl_name = c_l.selectbox("Ke:", list(DAFTAR_BAHASA.keys()), key=f"ln_{s_idx+i}", label_visibility="collapsed")
+                            if c_g.button("Ok", key=f"g_{s_idx+i}", use_container_width=True):
                                 try: st.markdown(f"<div style='background:#E0F2FE; border:1px solid #7DD3FC; padding:15px; border-radius:8px; margin-top:10px;'>{GoogleTranslator(source='auto', target=DAFTAR_BAHASA[tl_name]).translate(m_data['text'])}</div>", unsafe_allow_html=True)
                                 except Exception as e: st.error(f"Error: {e}")
 
@@ -1101,7 +1290,7 @@ def render_tab_search(docs_terpilih):
             c_p.button("⬅️ Prev", use_container_width=True, disabled=(st.session_state.current_page == 0), on_click=prev_page_1)
             c_pi.markdown(f"<div style='text-align:center; padding-top:8px;'>Halaman: <b>{st.session_state.current_page + 1} / {tot_pages}</b></div>", unsafe_allow_html=True)
             c_n.button("Next ➡️", use_container_width=True, disabled=(st.session_state.current_page >= tot_pages - 1), on_click=next_page_1)
-
+            
 # --- FRAGMENT SUMMARIZE (Hanya di tab Dokumen) ---
 @st.fragment
 def render_tab_summarize(docs_terpilih):
@@ -1191,7 +1380,7 @@ def render_tab_summarize(docs_terpilih):
     with sub_sent:
         if st.button(f"🎭 Mulai Analisis Sentimen", type="primary", key="btn_run_sent"):
             with st.spinner(f"Menganalisis emosi kalimat di '{target_file}'..."):
-                doc_sent = load_ai_model(st.session_state.local_files[target_file].get('lang', 'en'))(st.session_state.local_files[target_file]['cleaned'][:100000])
+                doc_sent = load_ai_model(st.session_state.local_files[target_file].get('lang', 'en'))(st.session_state.local_files[target_file]['cleaned'][:15000])
                 sia = SentimentIntensityAnalyzer()
                 
                 data_sentimen = []
@@ -1373,12 +1562,59 @@ def render_workspace_dokumen(file_names_doc):
 
 with tab_induk_doc:
     uploaded_docs = st.file_uploader(
-        "Upload Dokumen Teks (Support: PDF, DOCX, TXT)", 
+        "Upload Dokumen Teks & ELAN (Support: PDF, DOCX, TXT, EAF)", 
         accept_multiple_files=True, 
-        type=['pdf', 'docx', 'txt'],
-        key=f"uploader_doc_{st.session_state.uploader_key}"
+        type=['pdf', 'docx', 'txt', 'eaf'],
+        key=f"uploader_doc_{st.session_state.get('uploader_key', 'default')}"
     )
     
+    # [LOGIKA PEMROSESAN HARUS ADA DI SINI]
+    # Contoh sederhana jika ada file EAF yang diupload, kita simpan ke session state:
+    if uploaded_docs:
+        for doc in uploaded_docs:
+            if doc.name.endswith('.eaf'):
+                # Asumsi: Anda punya fungsi untuk konversi EAF ke DataFrame
+                # df_hasil_konversi = proses_eaf_ke_dataframe(doc)
+                
+                # Contoh DataFrame dummy agar tombol muncul:
+                df_dummy = pd.DataFrame({'Kolom1': [1, 2], 'Kolom2': ['A', 'B']}) 
+                
+                # Simpan ke session state dengan format yang dicari (dimulai dgn df_ dan diakhiri .eaf)
+                nama_key = f"df_{doc.name}"
+                st.session_state.local_files[nama_key] = df_dummy
+
+    # --- DEBUGGING TERMINAL ---
+    # Perintah print ini akan muncul di layar hitam (terminal/CMD), BUKAN di web.
+    print("--- DEBUGGING ---")
+    print("Isi session_state.local_files:", st.session_state.local_files.keys())
+
+    # --- UI UNTUK DOWNLOAD EXCEL HASIL CONVERT EAF ---
+    eaf_dfs = {k: v for k, v in st.session_state.local_files.items() if k.startswith("df_") and k.endswith(".eaf")}
+    
+    # Cek di terminal apakah eaf_dfs berhasil terisi
+    print("Isi eaf_dfs yang ditemukan:", eaf_dfs.keys()) 
+    
+    if eaf_dfs:
+        st.markdown("<div style='background:#F0FDF4; border:1px solid #BBF7D0; padding:15px; border-radius:8px; margin-bottom:20px;'>", unsafe_allow_html=True)
+        st.markdown("<h4 style='margin-top:0; color:#166534;'>📥 Download Hasil Konversi ELAN</h4>", unsafe_allow_html=True)
+        for eaf_key, df_eaf in eaf_dfs.items():
+            nama_file_asli = eaf_key.replace("df_", "")
+            buffer_excel = io.BytesIO()
+            with pd.ExcelWriter(buffer_excel, engine='openpyxl') as writer:
+                df_eaf.to_excel(writer, index=False, sheet_name='Data_EAF')
+            
+            st.download_button(
+                label=f"📊 Download Excel: {nama_file_asli}", 
+                data=buffer_excel.getvalue(), 
+                file_name=f"konversi_{nama_file_asli.replace('.eaf', '')}.xlsx", 
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 
+                key=f"dl_eaf_{nama_file_asli}"
+            )
+        st.markdown("</div>", unsafe_allow_html=True)
+    else:
+        # Menampilkan pesan di web jika belum ada data
+        st.info("Belum ada file EAF yang diproses.")
+        
     if uploaded_docs:
         file_baru_diproses = [f for f in uploaded_docs if f.name not in st.session_state.local_files]
         
@@ -1391,9 +1627,20 @@ with tab_induk_doc:
             for i, file in enumerate(file_baru_diproses):
                 base_pct = (i / total_file) * 100
                 def hitung_pct(step_pct): return int(base_pct + (step_pct / total_file))
+                
+                file_extension = file.name.split('.')[-1].lower()
 
                 bar_progres.progress(hitung_pct(10), text=f"📄 [1/4] Membaca teks dari '{file.name}'...")
-                raw_text = extract_text(file)
+                
+                raw_text = ""
+                if file_extension == 'eaf':
+                    eaf_content = file.getvalue().decode('utf-8')
+                    df_eaf = process_eaf_ultra_clean(eaf_content)
+                    if df_eaf is not None:
+                        raw_text = "\n".join(df_eaf['Source_Sentence'].tolist() + df_eaf['Target_Sentence'].tolist())
+                        st.session_state.local_files[f"df_{file.name}"] = df_eaf
+                else:
+                    raw_text = extract_text(file)
                 
                 bar_progres.progress(hitung_pct(40), text=f"🧹 [2/4] Membersihkan format teks '{file.name}'...")
                 teks_bersih = bersihkan_teks_untuk_analisis(raw_text)
