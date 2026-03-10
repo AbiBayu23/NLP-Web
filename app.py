@@ -289,6 +289,11 @@ def get_cached_wordcloud(text_data):
         colormap='viridis', 
         max_words=100
     ).generate(text_data)
+    
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.imshow(wc, interpolation='bilinear')
+    ax.axis("off")
+    
     return fig
 
 def render_dependency_tree(text, nlp_model):
@@ -1873,4 +1878,5 @@ with tab_induk_voice:
         
     else:
         st.info("👋 Silakan upload file rekaman suara untuk mendapatkan transkrip dan analisisnya.")
+
 
