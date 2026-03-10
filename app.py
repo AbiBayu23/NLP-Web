@@ -282,10 +282,13 @@ def dapatkan_data_visual(teks_terbatas, _nlp_model):
 
 @st.cache_data(show_spinner=False)
 def get_cached_wordcloud(text_data):
-    wc = WordCloud(width=600, height=280, background_color='white', colormap='viridis', max_words=100).generate(text_data)
-    fig, ax = plt.subplots(figsize=(8, 5))
-    ax.imshow(wc, interpolation='bilinear')
-    ax.axis("off")
+    wc = WordCloud(
+        width=600, 
+        height=280, 
+        background_color='white', 
+        colormap='viridis', 
+        max_words=100
+    ).generate(text_data)
     return fig
 
 def render_dependency_tree(text, nlp_model):
@@ -872,13 +875,9 @@ def render_tab_visual(docs_terpilih, suffix=""):
             with col_vis_kiri: render_visualisasi_sisi(docs_to_visualize[0], "#0EA5E9", "#38BDF8")
             with col_vis_kanan: render_visualisasi_sisi(docs_to_visualize[1], "#D946EF", "#E879F9")
 
-import html
-import math
-import re
+
 from collections import Counter
-import pandas as pd
-import streamlit as st
-import altair as alt
+
 
 @st.fragment
 def render_tab_search(docs_terpilih):
@@ -1874,3 +1873,4 @@ with tab_induk_voice:
         
     else:
         st.info("👋 Silakan upload file rekaman suara untuk mendapatkan transkrip dan analisisnya.")
+
