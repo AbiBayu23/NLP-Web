@@ -23,8 +23,8 @@ KAMUS_VERB_AKADEMIS = {"menggunakan", "mendukung", "memastikan", "menyaksikan", 
 KAMUS_ADJ_AKADEMIS = {"multilingual", "utama", "global", "presisi", "manual", "modern", "konfirmatori", "krusial", "penting", "baru", "lama", "baik", "buruk", "tinggi", "rendah", "besar", "kecil", "signifikan", "otomatis", "statis", "dinamis", "akurat", "efektif", "efisien", "relevan", "spesifik", "umum", "kompleks", "sederhana"}
 
 SPACY_MODELS = {
-    'id': 'stanza', 'en': 'en_core_web_lg', 'es': 'es_core_news_lg',
-    'fr': 'fr_core_news_lg', 'de': 'de_core_news_lg'
+    'id': 'stanza', 'en': 'en_core_web_sm', 'es': 'es_core_news_sm',
+    'fr': 'fr_core_news_sm', 'de': 'de_core_news_sm'
 }
 
 # --- PIPELINE KUSTOM ---
@@ -145,3 +145,4 @@ def hasilkan_insight_gemini(jaccard_sim, cosine_sim, top3_a, top3_b):
     respons_genai = model_ai.generate_content(prompt_instruksi)
 
     return respons_genai.text, target_model_name.replace('models/', '')
+
