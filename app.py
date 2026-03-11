@@ -25,9 +25,10 @@ from pydub import AudioSegment
 import streamlit as st
 import pandas as pd
 from bs4 import BeautifulSoup
-import re
-import io
-import time
+from collections import Counter
+import html
+from gensim.models import Word2Vec
+import numpy as np
 
 from ai_engine import (
     load_ai_model, 
@@ -122,6 +123,9 @@ def process_eaf_ultra_clean(eaf_content):
 
         target_text = " ".join(filtered_targets).strip()
         target_text = clean_duplicated_start(full_source, target_text)
+        if target_text and not target_text.endswith(('.', '?', '!')):
+            target_text += '.'
+            
         catatan_text = " | ".join(catatan_texts).strip()
 
         if target_text or catatan_text:
@@ -257,6 +261,38 @@ def get_cached_spacy_doc(text, lang):
     nlp_model = load_ai_model(lang)
     return nlp_model(text)
 
+def buat_indeks_dokumen(fname, df_or_text, nlp_model, file_type='txt'):
+    """Membangun tabel metadata agar pencarian tidak perlu membaca ulang seluruh teks"""
+    data_indeks = []
+    
+    if file_type == 'eaf':
+        for _, row in df_or_text.iterrows():
+            teks_sumber = str(row['Source_Sentence']).strip()
+            if not teks_sumber: continue
+            
+            doc = nlp_model(teks_sumber)
+            data_indeks.append({
+                'ID_Segmen': row['ID_Unit'], 
+                'File': fname,
+                'Teks_Asli': teks_sumber,
+                'Tokens': [t.text.lower() for t in doc],
+                'Lemmas': [t.lemma_.lower() for t in doc],
+                'POS_Tags': [t.pos_ for t in doc]
+            })
+    else:
+        doc = nlp_model(df_or_text[:20000]) 
+        for i, sent in enumerate(doc.sents):
+            data_indeks.append({
+                'ID_Segmen': f"Segmen_{i+1}",
+                'File': fname,
+                'Teks_Asli': sent.text.strip(),
+                'Tokens': [t.text.lower() for t in sent],
+                'Lemmas': [t.lemma_.lower() for t in sent],
+                'POS_Tags': [t.pos_ for t in sent]
+            })
+            
+    return pd.DataFrame(data_indeks)
+
 @st.cache_data(show_spinner=False)
 def dapatkan_data_visual(teks_terbatas, _nlp_model):
     doc_vis = _nlp_model(teks_terbatas)
@@ -282,18 +318,10 @@ def dapatkan_data_visual(teks_terbatas, _nlp_model):
 
 @st.cache_data(show_spinner=False)
 def get_cached_wordcloud(text_data):
-    wc = WordCloud(
-        width=600, 
-        height=280, 
-        background_color='white', 
-        colormap='viridis', 
-        max_words=100
-    ).generate(text_data)
-    
+    wc = WordCloud(width=600, height=280, background_color='white', colormap='viridis', max_words=100).generate(text_data)
     fig, ax = plt.subplots(figsize=(8, 5))
     ax.imshow(wc, interpolation='bilinear')
     ax.axis("off")
-    
     return fig
 
 def render_dependency_tree(text, nlp_model):
@@ -332,7 +360,7 @@ def render_dependency_tree(text, nlp_model):
     return full_html
 
 def buat_word_sketch(kata_target, teks_mentah, nlp_model):
-    doc = nlp_model(teks_mentah[:15000]) 
+    doc = nlp_model(teks_mentah[:20000]) 
     target_lemma = kata_target.lower()
     
     modifiers = []
@@ -493,10 +521,12 @@ tab_induk_doc, tab_induk_voice = st.tabs(["📄 Upload Dokumen", "🎙️ Upload
 def render_tab_compare(docs_terpilih, suffix=""):
     st.markdown("<h3 style='color:#0F172A;'>⚖️ Perbandingan Analisis Dokumen</h3>", unsafe_allow_html=True)
     
-    with st.expander("📖 Panduan: Cara Membaca Fitur Ini"):
-        st.info("""
-        **Bagian ini membandingkan dua dokumen secara langsung untuk melihat kemiripan dan perbedaan kosakata.**
-        *Pilih dua dokumen untuk melihat Jaccard Index dan Cosine Similarity.*
+    with st.expander("📖 Panduan Membaca Analisis Komparasi", expanded=False):
+        st.markdown("""
+        Fitur ini membandingkan isi dua dokumen untuk melihat seberapa mirip keduanya.
+        * **📊 Jaccard Index (Kemiripan Kata Fisik):** Menghitung berapa banyak *kata persis* yang sama-sama dipakai di kedua dokumen. Semakin tinggi angkanya, semakin banyak kosakata yang tumpang tindih.
+        * **🧠 Cosine Similarity (Kemiripan Makna):** Menghitung kemiripan *ide dan konteks*. Walaupun kata yang dipakai berbeda (misal file A memakai kata "pintar", file B "cerdas"), AI tetap bisa mengenali bahwa maknanya searah.
+        * **Tips Analisis:** Gulir ke bawah untuk melihat **Kata Eksklusif** (kata unik yang hanya muncul di satu dokumen) dan **Kata Beririsan** (kata yang dipakai bersama). Klik pada kata tersebut untuk melihat contoh kalimat aslinya.
         """)
     
     opsi_semua_doc = docs_terpilih
@@ -739,40 +769,9 @@ def render_tab_compare(docs_terpilih, suffix=""):
                                     render_awan_konteks_split(pil_iris.split(" ")[0], doc_a, doc_b, "aw_iris_split")
                             
                             st.markdown("<div style='height: 30px; display: block;'></div>", unsafe_allow_html=True)
-                            st.divider() 
+
                             
-                            cache_key_gemini = f"gemini_summary_{doc_a}_{doc_b}"
-
-                            if cache_key_gemini not in st.session_state:
-                                with st.spinner("✨ Menyusun narasi kesimpulan (Rule-based)..."):
-                                    try:
-                                        top3_a = [w for w, f in count_unik_a.most_common(3)]
-                                        top3_b = [w for w, f in count_unik_b.most_common(3)]
-                                        
-                                        teks_res = f"Berdasarkan analisis dokumen, kedua dokumen memiliki tingkat kemiripan kosakata eksak sebesar **{jaccard_sim*100:.1f}%** dan kesamaan makna kalimat mencapai **{cosine_sim*100:.1f}%**. Dokumen A memiliki fokus kata unik pada topik '{', '.join(top3_a)}', sedangkan Dokumen B lebih menyoroti area seputar '{', '.join(top3_b)}'."
-                                        nama_model = "Rule-based Engine"
-                                        
-                                        st.session_state[cache_key_gemini] = teks_res
-                                        st.session_state[f"{cache_key_gemini}_model"] = nama_model
-                                        
-                                    except Exception as e:
-                                        st.error(f"Gagal menghasilkan kesimpulan. Error: {e}")
-                                        
-                            if cache_key_gemini in st.session_state:
-                                nama_model_tersimpan = st.session_state.get(f"{cache_key_gemini}_model", "Rule-based")
-                                teks_kesimpulan = st.session_state[cache_key_gemini]
-                                
-                                st.markdown(f"""
-                                    <div style='background-color: #ECFDF5; border-left: 6px solid #10B981; padding: 25px; border-radius: 8px; margin-bottom: 30px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);'>
-                                        <h4 style='color: #065F46; margin-top: 0; margin-bottom: 15px;'>✨ Insight Analisis <span style='font-size:12px; color:#10B981;'>({nama_model_tersimpan})</span></h4>
-                                        <p style='color: #064E3B; font-size:15px; line-height:1.8; margin-bottom:0; text-align: justify;'>
-                                            {teks_kesimpulan}
-                                        </p>
-                                    </div>
-                                """, unsafe_allow_html=True)
-                                
-                            st.markdown("<div style='height: 20px; display: block;'></div>", unsafe_allow_html=True)
-
+                            
 @st.fragment
 def render_tab_visual(docs_terpilih, suffix=""):
     st.markdown("<h3 style='color:#0F172A;'>📈 Visualisasi Detail</h3>", unsafe_allow_html=True)
@@ -801,15 +800,28 @@ def render_tab_visual(docs_terpilih, suffix=""):
     if not docs_to_visualize:
         return
 
+    state_key = f"is_rendered_{suffix}"
+    
+    if state_key not in st.session_state:
+        st.session_state[state_key] = False
+
+    if st.button("🚀 Render Visualisasi", type="primary", key=f"btn_render_{suffix}"):
+        st.session_state[state_key] = True
+
+    if not st.session_state[state_key]:
+        st.info("Klik tombol 'Render Visualisasi' di atas untuk mulai memproses data.")
+        return
+
     def render_visualisasi_sisi(fname, warna_utama, warna_kedua):
         st.markdown(f"<div style='background:{warna_utama}22; padding:10px 15px; border-radius:8px; border-bottom:3px solid {warna_utama}; margin-bottom:15px;'><h4 style='margin:0; color:#1E293B;'>📄 {fname}</h4></div>", unsafe_allow_html=True)
         st.markdown("<div class='scrollable-column'>", unsafe_allow_html=True)
+        
         if 'vis_cache' not in st.session_state.local_files[fname]:
             with st.spinner(f"Memproses visualisasi {fname}..."):
                 teks_dokumen = st.session_state.local_files[fname]['text']
                 teks_mentah_aktif = st.session_state.local_files[fname]['cleaned']
                 nlp_aktif = load_ai_model(st.session_state.local_files[fname].get('lang', 'en'))
-                df_pos, df_words, df_cloud_text = dapatkan_data_visual(teks_dokumen[:80000], nlp_aktif)
+                df_pos, df_words, df_cloud_text = dapatkan_data_visual(teks_dokumen[:20000], nlp_aktif)
                 
                 if not df_words.empty and 'Pasangan 1' not in df_words.columns:
                     col1, col2, col3, col4, col5 = [], [], [], [], []
@@ -830,7 +842,7 @@ def render_tab_visual(docs_terpilih, suffix=""):
 
                 cloud_img = None
                 if df_cloud_text:
-                    fig = get_cached_wordcloud(df_cloud_text[:80000])
+                    fig = get_cached_wordcloud(df_cloud_text[:20000])
                     buf = io.BytesIO(); fig.savefig(buf, format="png", bbox_inches='tight', pad_inches=0); plt.close(fig)
                     cloud_img = buf.getvalue()
 
@@ -863,6 +875,7 @@ def render_tab_visual(docs_terpilih, suffix=""):
             buffer_excel = io.BytesIO()
             with pd.ExcelWriter(buffer_excel, engine='openpyxl') as writer:
                 df_tabel_500.to_excel(writer, index=False, sheet_name='Concordance')
+            
             st.download_button(
                 label="📥 Download Data Excel (XLSX)", 
                 data=buffer_excel.getvalue(), 
@@ -880,10 +893,6 @@ def render_tab_visual(docs_terpilih, suffix=""):
             with col_vis_kiri: render_visualisasi_sisi(docs_to_visualize[0], "#0EA5E9", "#38BDF8")
             with col_vis_kanan: render_visualisasi_sisi(docs_to_visualize[1], "#D946EF", "#E879F9")
 
-
-from collections import Counter
-
-
 @st.fragment
 def render_tab_search(docs_terpilih):
     def prev_page_1(): st.session_state.current_page -= 1
@@ -891,19 +900,19 @@ def render_tab_search(docs_terpilih):
     def update_ws_word(new_word): st.session_state["in_word_sketch"] = new_word 
 
     st.markdown("<h3 style='color:#0F172A;'>🔍 Pencarian Pintar & Pemrofilan Kata</h3>", unsafe_allow_html=True)
-    with st.expander("📖 Panduan: Penjelasan Tiap Mode Pencarian"):
-        st.info("""
-            * **🔍 Lemmatization:** Mencari kata berdasarkan akar katanya (Tampilan KWIC).
-            * **🔗 Collocation (Asosiasi Korpus):** Ekstraksi teman sanding kata dengan skor PMI.
-            * **🔬 Morphology Search:** Menemukan variasi bentuk imbuhan.
-            * **🧠 Semantic Search:** Mencari makna mirip.
-            * **🧩 Word Sketch:** Bagaimana kata dikelilingi kata lain.
-            * **🏷️ Entity Search (NER):** Organisasi, Lokasi, dll.
-            * **📚 POS Search:** Jabatan tata bahasa.
-            * **🛒 Boolean Search:** Logika AND/OR/NOT.
-            * **⚙️ Regex Search:** Pola format Email/Sitasi.
-            * **🌳 Dependency Search:** Hubungan anak-induk kalimat.
-            """)
+    with st.expander("📖 Panduan Mode Pencarian AI (Untuk Pemula)", expanded=False):
+        st.markdown("""
+        **Gunakan kecerdasan buatan (AI) untuk menemukan informasi spesifik dari tumpukan teks:**
+        
+        * 🔍 **Lemmatization:** Mencari kata dasar beserta semua variasinya. *(Ketik "lari", maka "berlari" dan "melarikan" juga akan tersorot otomatis).*
+        * 🔗 **Collocation (Teman Sanding):** Menemukan kata apa yang paling sering muncul *berdekatan* dengan kata kunci Anda. Semakin tinggi skor PMI, semakin erat hubungannya di dalam teks.
+        * 🔬 **Morphology:** Membedah satu kata dasar menjadi grafik variasi imbuhan yang digunakan dalam dokumen.
+        * 🧠 **Semantic Search:** Mencari kalimat yang *maknanya mirip* atau sejalan dengan apa yang Anda ketik, meskipun susunan katanya sama sekali berbeda.
+        * 🧩 **Word Sketch:** Memprofilkan suatu kata. Melihat kata sifat apa yang sering menggambarkannya, atau tindakan (kata kerja) apa yang sering ia lakukan.
+        * 🏷️ **Entity Search (NER):** Mesin otomatis melacak dan menyorot entitas spesifik seperti **Nama Orang, Organisasi, Lokasi, atau Nominal Uang** tanpa perlu Anda ketik satu per satu.
+        * 📚 **POS Search:** Mencari berdasarkan *jabatan kata* (Misal: temukan semua 'Kata Sifat' di dokumen ini).
+        * ⚙️ **Fitur Lanjutan:** Gunakan **Regex** untuk mencari format pola (seperti email/tanggal), **Boolean** untuk logika (Kata A *DAN* Kata B), atau **Dependency** untuk melihat struktur anak-induk kalimat.
+        """)
 
     col_mode, col_input, col_btn = st.columns([2.5, 4.5, 1], gap="small")
     with col_mode:
@@ -911,6 +920,19 @@ def render_tab_search(docs_terpilih):
             "🔍 Lemmatization", "🔗 Collocation (Asosiasi Korpus)", "🔬 Morphology Search (Variasi Kata)", "🧠 Semantic Search", "🧩 Word Sketch (Profil Kata)", 
             "🏷️ Entity Search (NER)", "📚 POS Search (Kelas Kata)", "🛒 Boolean Search", "⚙️ Regex Search", "🌳 Dependency Search"
         ], label_visibility="collapsed")
+        
+    if 'last_search_mode' not in st.session_state:
+        st.session_state.last_search_mode = mode_pencarian
+
+    if st.session_state.last_search_mode != mode_pencarian:
+        st.session_state.last_search_mode = mode_pencarian
+        st.session_state.last_query = "" 
+        
+        st.session_state.search_results = []
+        st.session_state.colloc_results = pd.DataFrame()
+        st.session_state.morph_results = pd.DataFrame()
+        st.session_state.sketch_results = {}
+        st.session_state.current_page = 0
         
     with col_input:
         if "NER" in mode_pencarian:
@@ -988,15 +1010,25 @@ def render_tab_search(docs_terpilih):
             
             if "Collocation" in mode_pencarian:
                 try:
-                    node_word = query_aktif.lower()
+                    node_word = query_aktif.lower().strip()
                     freq_node = 0
                     freq_collocate = Counter()
                     freq_cooc = Counter()
                     total_words = 0
                     
                     for fname in docs_terpilih:
-                        doc = get_cached_spacy_doc(st.session_state.local_files[fname]['cleaned'][:100000], st.session_state.local_files[fname]['lang'])
-                        tokens = [t.text.lower() for t in doc if not t.is_punct and not t.is_space]
+                        df_indeks = st.session_state.local_files[fname].get('index_df')
+                        
+                        if df_indeks is None or df_indeks.empty:
+                            st.warning(f"⚠️ Cache Indeks file '{fname}' kosong. Silakan hapus dan upload ulang file ini.")
+                            continue
+                            
+                        tokens = []
+                        for t_list, p_list in zip(df_indeks['Tokens'], df_indeks['POS_Tags']):
+                            for t, p in zip(t_list, p_list):
+                                if p not in ['SPACE', 'PUNCT', 'SYM']: 
+                                    tokens.append(t)
+                                    
                         total_words += len(tokens)
                         
                         for i, token in enumerate(tokens):
@@ -1012,7 +1044,7 @@ def render_tab_search(docs_terpilih):
                     colloc_data = []
                     if freq_node > 0:
                         for col_word, f_co in freq_cooc.items():
-                            if f_co >= 2: # Hanya tampilkan jika muncul minimal 2 kali
+                            if f_co >= 2: 
                                 f_col = freq_collocate[col_word]
                                 pmi = math.log2((f_co * total_words) / (freq_node * f_col))
                                 colloc_data.append({
@@ -1031,7 +1063,8 @@ def render_tab_search(docs_terpilih):
                         
                     st.session_state.search_results, st.session_state.sketch_results, st.session_state.morph_results = [], {}, pd.DataFrame()
                     st.session_state.last_query = query_aktif
-                except Exception as e: st.error(f"Error: {e}")
+                except Exception as e: 
+                    st.error(f"Error Collocation: {e}")
 
             elif "Morphology" in mode_pencarian:
                 try:
@@ -1039,7 +1072,7 @@ def render_tab_search(docs_terpilih):
                     morph_data = []
                     for fname in docs_terpilih: 
                         teks_mentah = str(st.session_state.local_files[fname]['cleaned'])
-                        doc = get_cached_spacy_doc(teks_mentah[:100000], st.session_state.local_files[fname]['lang'])
+                        doc = get_cached_spacy_doc(teks_mentah[:20000], st.session_state.local_files[fname]['lang'])
                         for token in doc:
                             if token.lemma_.lower() == target_lemma and not token.is_punct and not token.is_space:
                                 morph_data.append({"Bentuk Teks Asli": token.text.lower(), "Kelas Kata (POS)": token.pos_, "Struktur Morfologi": str(token.morph) if str(token.morph) else "Bentuk Dasar (Base)"})
@@ -1060,7 +1093,7 @@ def render_tab_search(docs_terpilih):
                 if "Lemmatization" in mode_pencarian or "Semantic" in mode_pencarian: query_doc = nlp_query(query_aktif)
                 
                 for fname in docs_terpilih: 
-                    doc = get_cached_spacy_doc(st.session_state.local_files[fname]['cleaned'][:100000], st.session_state.local_files[fname]['lang'])
+                    doc = get_cached_spacy_doc(st.session_state.local_files[fname]['cleaned'][:20000], st.session_state.local_files[fname]['lang'])
                     
                     if "POS Search" in mode_pencarian:
                         for s in doc.sents:
@@ -1099,7 +1132,7 @@ def render_tab_search(docs_terpilih):
                     elif "Regex" in mode_pencarian:
                         try:
                             pola_regex = re.compile(query_aktif)
-                            sents = re.split(r'(?<=[.!?]) +', st.session_state.local_files[fname]['cleaned'][:100000])
+                            sents = re.split(r'(?<=[.!?]) +', st.session_state.local_files[fname]['cleaned'][:20000])
                             for m_text in sents:
                                 m_text = m_text.strip()
                                 if pola_regex.search(m_text):
@@ -1107,27 +1140,50 @@ def render_tab_search(docs_terpilih):
                         except: pass
 
                     elif "Lemmatization" in mode_pencarian:
-                        q_l = query_doc[0].lemma_.lower() if len(query_doc) > 0 else query_aktif.lower()
-                        for s in doc.sents:
-                            matches = [t for t in s if t.lemma_.lower() == q_l]
+                        q_l = query_doc[0].lemma_.lower().strip() if len(query_doc) > 0 else query_aktif.lower().strip()
+                        df_indeks = st.session_state.local_files[fname].get('index_df')
+                        if df_indeks is None or df_indeks.empty:
+                            st.warning(f"⚠️ Cache Indeks untuk file '{fname}' belum terbentuk. Silakan HAPUS file ini dari daftar (di bawah) dan UPLOAD ULANG agar fitur pencarian super-cepat bekerja.")
+                            continue
+                            
+                        baris_cocok = df_indeks[df_indeks.apply(lambda row: q_l in row['Lemmas'] or q_l in row['Tokens'] or query_aktif.lower() in row['Tokens'], axis=1)]
+                        
+                        for _, row in baris_cocok.iterrows():
+                            teks_kalimat = row['Teks_Asli']
+                            id_segmen = row['ID_Segmen']
+                            
+                            s = nlp_query(teks_kalimat)
+                            
+                            matches = [t for t in s if t.lemma_.lower().strip() == q_l or t.text.lower().strip() == q_l or t.text.lower().strip() == query_aktif.lower()]
+                            
                             if matches:
                                 for t in matches:
-                                    idx_in_sent = t.idx - s.start_char
-                                    left_context = html.escape(s.text[:idx_in_sent].strip())
+                                    idx_in_sent = t.idx
+                        
+                                    left_raw = s.text[:idx_in_sent].strip()
+                                    right_raw = s.text[idx_in_sent + len(t.text):].strip()
+                                    
+                                    if len(left_raw) > 90: 
+                                        left_raw = left_raw[-90:].strip()
+                                    if len(right_raw) > 90: 
+                                        right_raw = right_raw[:90].strip()
+                                        
+                                    left_context = html.escape(left_raw)
                                     keyword = html.escape(t.text)
-                                    right_context = html.escape(s.text[idx_in_sent + len(t.text):].strip())
+                                    right_context = html.escape(right_raw)
                                     
                                     h_light = (
                                         "<div style='display:flex; justify-content:center; align-items:center; width:100%; "
                                         "font-family:\"Times New Roman\", Times, serif; font-size:16px; padding:10px 0; border-bottom:1px solid #E2E8F0;'>"
-                                        f"<div style='flex: 1 1 0%; min-width: 0; text-align:right; padding-right:15px; color:#475569; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;'>{left_context}</div>"
-                                        f"<div style='width:140px; text-align:center; flex:none; background:#0EA5E9; color:white; padding:2px 8px; border-radius:4px; font-weight:bold; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;'>{keyword}</div>"
-                                        f"<div style='flex: 1 1 0%; min-width: 0; text-align:left; padding-left:15px; color:#475569; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;'>{right_context}</div>"
+                                        f"<div style='flex: 1 1 0%; min-width: 0; text-align:right; padding-right:10px; color:#475569; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; direction:rtl;'><bdi>{left_context}</bdi></div>"
+                                        f"<div style='flex:none; background:#0EA5E9; color:white; padding:2px 10px; border-radius:4px; font-weight:bold; white-space:nowrap;'>{keyword}</div>"
+                                        f"<div style='flex: 1 1 0%; min-width: 0; text-align:left; padding-left:10px; color:#475569; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;'>{right_context}</div>"
                                         "</div>"
                                     )
                                     
-                                    matches_global.append({'file': fname, 'text': s.text.strip(), 'html': h_light, 'pills': "", 'tags': []})
-                    
+                                    p_html = f"<span style='background:#10B981; color:white; padding:3px 8px; border-radius:4px; font-size:11px; font-weight:bold;'>📝 ID Segmen: {id_segmen}</span>"
+                                    
+                                    matches_global.append({'file': fname, 'text': s.text.strip(), 'html': h_light, 'pills': p_html, 'tags': []})
                     elif "Semantic" in mode_pencarian:
                         lang_query_wn = st.session_state.local_files[docs_terpilih[0]]['lang'] if docs_terpilih else 'en'
                         sinonim_query = dapatkan_sinonim(query_aktif, lang_query_wn)
@@ -1167,34 +1223,55 @@ def render_tab_search(docs_terpilih):
                 st.session_state.current_page, st.session_state.last_query = 0, query_aktif
 
     mode_saran_aktif = ["Lemmatization", "Semantic", "Word Sketch", "Morphology", "Collocation"]
-    if st.session_state.get('search_results') or st.session_state.get('colloc_results') is not None:
-        if any(m in mode_pencarian for m in mode_saran_aktif):
-            query_pencarian = st.session_state.get('last_query', "").strip()
-            if query_pencarian:
-                lang_saran = st.session_state.local_files[docs_terpilih[0]]['lang'] if docs_terpilih else 'en'
-                sinonim_set = dapatkan_sinonim(query_pencarian, lang_saran)
+    
+    query_pencarian = st.session_state.get('last_query', "").strip()   
+    if query_pencarian and any(m in mode_pencarian for m in mode_saran_aktif):
+        lang_saran = st.session_state.local_files[docs_terpilih[0]]['lang'] if docs_terpilih else 'en'
+        query_lower = query_pencarian.lower()
+        
+        try: 
+            q_lemma = nlp_query(query_pencarian)[0].lemma_.lower()
+        except: 
+            q_lemma = query_lower
 
-                vocab_aktif = set()
-                try:
-                    import nltk
-                    from nltk.corpus import wordnet
-                    wn_lang_saran = 'ind' if st.session_state.local_files[docs_terpilih[0]]['lang'] == 'id' else 'eng'
-                    for syn in wordnet.synsets(query_pencarian, lang=wn_lang_saran):
-                        for l in syn.lemmas(lang=wn_lang_saran):
-                            kata_terkait = l.name().lower()
-                            if kata_terkait != query_pencarian.lower() and '_' not in kata_terkait:
-                                sinonim_set.add(kata_terkait)
-                except: pass
+        sinonim_set = set()
+        
+        try:
+            sinonim_tambahan = dapatkan_sinonim(query_pencarian, lang_saran)
+            if isinstance(sinonim_tambahan, (list, set)):
+                sinonim_set.update(sinonim_tambahan)
+        except Exception as e: 
+            pass
 
-                for doc_name in docs_terpilih:
-                    vocab_aktif.update(st.session_state.local_files[doc_name]['vocab'])
-                saran_kata = [kata for kata in sinonim_set if kata in vocab_aktif][:8] 
-                if saran_kata:
-                    st.markdown("<div style='font-size:14px; color:#64748B; margin-bottom:8px;'>💡 Saran kata terkait yang <b>ada di dokumen ini</b>:</div>", unsafe_allow_html=True)
-                    try: st.pills("Saran", saran_kata, key="saran_pills_widget", on_change=aksi_klik_saran, label_visibility="collapsed")
-                    except AttributeError: pass
+        vocab_aktif = set()
+        for doc_name in docs_terpilih:
+            df_indeks = st.session_state.local_files[doc_name].get('index_df')
+            
+            if df_indeks is not None and not df_indeks.empty:
+                vocab_aktif.update(set(df_indeks['Tokens'].explode().dropna()))
+                vocab_aktif.update(set(df_indeks['Lemmas'].explode().dropna()))
+            else:
+                vocab_aktif.update(st.session_state.local_files[doc_name].get('vocab', []))
 
-    # TAMPILAN HASIL
+        saran_bersih = []
+        for kata in sinonim_set:
+            kata_lower = kata.lower().strip()
+            
+            if ' ' in kata_lower or '_' in kata_lower:
+                continue
+                
+            if kata_lower != query_lower and kata_lower != q_lemma:
+                if kata_lower in vocab_aktif:
+                    saran_bersih.append(kata_lower)
+
+        saran_kata = list(set(saran_bersih))[:8]         
+        if saran_kata:
+            st.markdown("<div style='font-size:14px; color:#64748B; margin-bottom:8px;'>💡 Saran kata terkait yang <b>ada di dokumen ini</b>:</div>", unsafe_allow_html=True)
+            try: 
+                st.pills("Saran", saran_kata, key="saran_pills_widget", on_change=aksi_klik_saran, label_visibility="collapsed")
+            except AttributeError: 
+                st.selectbox("💡 Saran kata terkait yang ada di dokumen:", ["-- Pilih --"] + saran_kata, key="saran_pills_widget", on_change=aksi_klik_saran)
+
     if "Collocation" in mode_pencarian:
         if not st.session_state.colloc_results.empty:
             df_c = st.session_state.colloc_results
@@ -1234,7 +1311,7 @@ def render_tab_search(docs_terpilih):
             
             if "Lemmatization" in mode_pencarian:
                 c_i, _, c_ft, c_fd = st.columns([5, 1, 3, 1.05], gap="small")
-                c_i.markdown(f"<div style='color:#059669; font-weight:bold; padding-top:8px;'>✅ Ditemukan {tot_res} baris KWIC.</div>", unsafe_allow_html=True)
+                c_i.markdown(f"<div style='color:#059669; font-weight:bold; padding-top:8px;'>✅ Ditemukan {tot_res} baris.</div>", unsafe_allow_html=True)
             else:
                 c_i, _, c_ft, c_fd = st.columns([5, 1, 3, 1.05], gap="small")
                 c_i.markdown(f"<div style='color:#059669; font-weight:bold; padding-top:8px;'>✅ Ditemukan {tot_res} kalimat.</div>", unsafe_allow_html=True)
@@ -1301,6 +1378,13 @@ def render_tab_summarize(docs_terpilih):
     st.markdown("<h3 style='color:#0F172A;'>📝 Analisis Dokumen Mendalam</h3>", unsafe_allow_html=True)
     target_file = st.selectbox("Pilih dokumen spesifik untuk dianalisis:", docs_terpilih, key="sel_doc_sum_sent_top")
     sub_topic, sub_sum, sub_sent = st.tabs(["🗂️ Pemodelan Topik (LDA)", "📑 Ekstraksi Ringkasan", "😊 Analisis Sentimen (VADER)"])
+    with sub_topic:
+        with st.expander("📖 Panduan Membaca Pemodelan Topik (LDA)", expanded=False):
+            st.markdown("""
+            **Tujuan:** Menemukan *tema tersembunyi* dari dokumen yang sangat panjang tanpa harus membacanya dari awal sampai akhir.
+            * **Cara Kerja:** AI akan memindai ribuan kata, lalu secara otomatis mengelompokkan kata-kata yang sering muncul bersamaan ke dalam beberapa "keranjang tema" (Topik).
+            * **Cara Membaca Hasil:** Setiap kotak Topik akan menampilkan deretan kata. Rangkai kata-kata tersebut di kepala Anda untuk menyimpulkan pembicaraannya. *(Contoh: Jika Topik 1 berisi kata 'sel', 'DNA', 'mikroskop', berarti tema tersebut sedang membahas 'Biologi').*
+            """)
     
     with sub_topic:
         with st.expander("📖 Panduan: Cara Membaca Topik"):
@@ -1315,7 +1399,7 @@ def render_tab_summarize(docs_terpilih):
                 from sklearn.decomposition import LatentDirichletAllocation
                 
                 nlp_aktif = load_ai_model(st.session_state.local_files[target_file].get('lang', 'en'))
-                corpus_sentences = [s.text.lower() for s in nlp_aktif(st.session_state.local_files[target_file]['cleaned'][:150000]).sents if len(s.text.split()) > 4]
+                corpus_sentences = [s.text.lower() for s in nlp_aktif(st.session_state.local_files[target_file]['cleaned'][:20000]).sents if len(s.text.split()) > 4]
                 
                 if len(corpus_sentences) < 10:
                     st.warning("Teks terlalu pendek (minimal 10 kalimat).")
@@ -1384,7 +1468,7 @@ def render_tab_summarize(docs_terpilih):
     with sub_sent:
         if st.button(f"🎭 Mulai Analisis Sentimen", type="primary", key="btn_run_sent"):
             with st.spinner(f"Menganalisis emosi kalimat di '{target_file}'..."):
-                doc_sent = load_ai_model(st.session_state.local_files[target_file].get('lang', 'en'))(st.session_state.local_files[target_file]['cleaned'][:15000])
+                doc_sent = load_ai_model(st.session_state.local_files[target_file].get('lang', 'en'))(st.session_state.local_files[target_file]['cleaned'][:20000])
                 sia = SentimentIntensityAnalyzer()
                 
                 data_sentimen = []
@@ -1571,31 +1655,17 @@ with tab_induk_doc:
         type=['pdf', 'docx', 'txt', 'eaf'],
         key=f"uploader_doc_{st.session_state.get('uploader_key', 'default')}"
     )
-    
-    # [LOGIKA PEMROSESAN HARUS ADA DI SINI]
-    # Contoh sederhana jika ada file EAF yang diupload, kita simpan ke session state:
     if uploaded_docs:
         for doc in uploaded_docs:
             if doc.name.endswith('.eaf'):
-                # Asumsi: Anda punya fungsi untuk konversi EAF ke DataFrame
-                # df_hasil_konversi = proses_eaf_ke_dataframe(doc)
-                
-                # Contoh DataFrame dummy agar tombol muncul:
                 df_dummy = pd.DataFrame({'Kolom1': [1, 2], 'Kolom2': ['A', 'B']}) 
-                
-                # Simpan ke session state dengan format yang dicari (dimulai dgn df_ dan diakhiri .eaf)
                 nama_key = f"df_{doc.name}"
                 st.session_state.local_files[nama_key] = df_dummy
 
-    # --- DEBUGGING TERMINAL ---
-    # Perintah print ini akan muncul di layar hitam (terminal/CMD), BUKAN di web.
     print("--- DEBUGGING ---")
     print("Isi session_state.local_files:", st.session_state.local_files.keys())
 
-    # --- UI UNTUK DOWNLOAD EXCEL HASIL CONVERT EAF ---
     eaf_dfs = {k: v for k, v in st.session_state.local_files.items() if k.startswith("df_") and k.endswith(".eaf")}
-    
-    # Cek di terminal apakah eaf_dfs berhasil terisi
     print("Isi eaf_dfs yang ditemukan:", eaf_dfs.keys()) 
     
     if eaf_dfs:
@@ -1615,13 +1685,9 @@ with tab_induk_doc:
                 key=f"dl_eaf_{nama_file_asli}"
             )
         st.markdown("</div>", unsafe_allow_html=True)
-    else:
-        # Menampilkan pesan di web jika belum ada data
-        st.info("Belum ada file EAF yang diproses.")
         
     if uploaded_docs:
         file_baru_diproses = [f for f in uploaded_docs if f.name not in st.session_state.local_files]
-        
         if file_baru_diproses:
             ada_file_baru = True
             total_file = len(file_baru_diproses)
@@ -1631,18 +1697,16 @@ with tab_induk_doc:
             for i, file in enumerate(file_baru_diproses):
                 base_pct = (i / total_file) * 100
                 def hitung_pct(step_pct): return int(base_pct + (step_pct / total_file))
-                
                 file_extension = file.name.split('.')[-1].lower()
-
                 bar_progres.progress(hitung_pct(10), text=f"📄 [1/4] Membaca teks dari '{file.name}'...")
-                
                 raw_text = ""
+                df_eaf_temp = None 
                 if file_extension == 'eaf':
                     eaf_content = file.getvalue().decode('utf-8')
-                    df_eaf = process_eaf_ultra_clean(eaf_content)
-                    if df_eaf is not None:
-                        raw_text = "\n".join(df_eaf['Source_Sentence'].tolist() + df_eaf['Target_Sentence'].tolist())
-                        st.session_state.local_files[f"df_{file.name}"] = df_eaf
+                    df_eaf_temp = process_eaf_ultra_clean(eaf_content)
+                    if df_eaf_temp is not None:
+                        raw_text = "\n".join(df_eaf_temp['Source_Sentence'].dropna().astype(str).tolist())
+                        st.session_state.local_files[f"df_{file.name}"] = df_eaf_temp
                 else:
                     raw_text = extract_text(file)
                 
@@ -1652,16 +1716,31 @@ with tab_induk_doc:
                 bar_progres.progress(hitung_pct(60), text=f"🌐 [3/4] Mendeteksi bahasa '{file.name}'...")
                 try: deteksi_lang = detect(teks_bersih[:5000]) 
                 except: deteksi_lang = 'en'
+
+                bar_progres.progress(hitung_pct(70), text=f"🗂️ Membangun Indeks Cache untuk '{file.name}'...")
+                nlp_aktif = load_ai_model(deteksi_lang)
+                df_indeks = pd.DataFrame()
                 
+                if file_extension == 'eaf' and df_eaf_temp is not None:
+                    df_indeks = buat_indeks_dokumen(file.name, df_eaf_temp, nlp_aktif, 'eaf')
+                else:
+                    df_indeks = buat_indeks_dokumen(file.name, teks_bersih, nlp_aktif, 'txt')
+
                 bar_progres.progress(hitung_pct(80), text=f"🧩 [4/4] Mengekstrak kosakata & statistik '{file.name}'...")
                 pola_kata = r'\b[a-zA-Z0-9]+(?:-[a-zA-Z0-9]+)*\b'
                 semua_kata = re.findall(pola_kata, raw_text.lower())
-                jml_kalimat = raw_text[:80000].count('.') + raw_text[:80000].count('!') + raw_text[:80000].count('?')
+                jml_kalimat = raw_text[:20000].count('.') + raw_text[:20000].count('!') + raw_text[:20000].count('?')
                 
                 st.session_state.local_files[file.name] = {
-                    'text': raw_text, 'cleaned': teks_bersih, 'lang': deteksi_lang,
-                    'vocab': set(semua_kata), 'type': 'doc', 'stats': {'k': jml_kalimat, 'w': len(semua_kata)}
+                    'text': raw_text, 
+                    'cleaned': teks_bersih, 
+                    'lang': deteksi_lang,
+                    'vocab': set(semua_kata), 
+                    'type': 'doc', 
+                    'stats': {'k': jml_kalimat, 'w': len(semua_kata)},
+                    'index_df': df_indeks
                 }
+                
                 bar_progres.progress(hitung_pct(100), text=f"✅ Selesai memproses '{file.name}'!")
                 st.session_state.notif_msg = f"Selesai mengunggah dan memproses '{file.name}'!"
                 st.session_state.notif_time = time.time()
@@ -1724,30 +1803,23 @@ with tab_induk_doc:
 @st.fragment
 def render_workspace_voice(file_names_voice):
     st.markdown("<div style='font-size:14px; font-weight:600; color:#475569; margin-bottom:8px;'>Pilih & Filter Voice Aktif:</div>", unsafe_allow_html=True)
-    
     if 'ms_voice' not in st.session_state:
         st.session_state.ms_voice = file_names_voice[:1] if file_names_voice else []
 
     col_f1_v, col_s1_v, col_s2_v = st.columns([3, 5, 2], vertical_alignment="bottom")
-    
     with col_f1_v:
-        pilihan_grup_v = st.selectbox("Berdasarkan Sub-Corpus:", ["Semua File"] + list(st.session_state.sub_corpora.keys()), label_visibility="collapsed", key="pg_voice")
-        
+        pilihan_grup_v = st.selectbox("Berdasarkan Sub-Corpus:", ["Semua File"] + list(st.session_state.sub_corpora.keys()), label_visibility="collapsed", key="pg_voice") 
     with col_s2_v:
         cek_semua_v = st.checkbox("Pilih Semua", key="ca_voice")
-
     with col_s1_v:
         tersedia_v = file_names_voice if pilihan_grup_v == "Semua File" else [f for f in st.session_state.sub_corpora.get(pilihan_grup_v, []) if f in file_names_voice]
-        
         if cek_semua_v:
             st.session_state.ms_voice = tersedia_v
-            
         with st.popover(f"🎙️ Pilih File ({len([f for f in st.session_state.ms_voice if f in tersedia_v])} Terpilih)", use_container_width=True):
             temp_selection_v = []
             for f in tersedia_v:
                 if st.checkbox(f, value=(f in st.session_state.ms_voice), key=f"chk_v_{f}"):
                     temp_selection_v.append(f)
-            
             if not cek_semua_v:
                 st.session_state.ms_voice = temp_selection_v
                 
@@ -1756,12 +1828,10 @@ def render_workspace_voice(file_names_voice):
     if selected_voice:
         st.markdown("---")
         tab_c_voice, tab_t_voice = st.tabs(["⚖️ Compare & Visual", "⏱️ Timeline Transkrip"])
-        
         with tab_c_voice: 
             render_tab_compare(selected_voice, suffix="voice")
             st.markdown("<hr style='border: 2px dashed #CBD5E1; margin: 40px 0;'>", unsafe_allow_html=True)
-            render_tab_visual(selected_voice, suffix="voice")
-            
+            render_tab_visual(selected_voice, suffix="voice")   
         with tab_t_voice: 
             render_tab_transkrip(selected_voice)
     else:
@@ -1779,40 +1849,36 @@ with tab_induk_voice:
     
     if uploaded_voice:
         file_voice_baru = [f for f in uploaded_voice if f.name not in st.session_state.local_files]
-        
         if file_voice_baru:
             ada_file_baru = True
             total_voice = len(file_voice_baru)
-            
             bar_progres_v = st.progress(0, text="Menyiapkan mesin transkripsi AI...")
-            
             for i, file in enumerate(file_voice_baru):
                 base_pct = (i / total_voice) * 100
-                def hitung_pct_v(step_pct): return int(base_pct + (step_pct / total_voice))
 
+                def hitung_pct_v(step_pct): return int(base_pct + (step_pct / total_voice))
                 bar_progres_v.progress(hitung_pct_v(15), text=f"🎙️ [1/5] Mentranskripsi audio '{file.name}' (Membutuhkan waktu)...")
                 raw_text, segments = transkripsi_suara_whisper(file)
-                
+
                 bar_progres_v.progress(hitung_pct_v(60), text=f"🧹 [2/5] Membersihkan teks hasil transkripsi '{file.name}'...")
-                teks_bersih = bersihkan_teks_untuk_analisis(raw_text)
-                
+                teks_bersih = bersihkan_teks_untuk_analisis(raw_text)    
+
                 bar_progres_v.progress(hitung_pct_v(70), text=f"🌐 [3/5] Mengidentifikasi bahasa audio '{file.name}'...")
                 try: deteksi_lang = detect(teks_bersih[:5000]) 
                 except: deteksi_lang = 'en'
-                if deteksi_lang not in SPACY_MODELS: deteksi_lang = 'en'
-                
+
+                if deteksi_lang not in SPACY_MODELS: deteksi_lang = 'en'               
                 bar_progres_v.progress(hitung_pct_v(85), text=f"🧠 [4/5] Menyesuaikan model Linguistik '{file.name}'...")
 
-                
                 bar_progres_v.progress(hitung_pct_v(95), text=f"📊 [5/5] Menghitung statistik kata '{file.name}'...")
                 pola_kata = r'\b[a-zA-Z0-9]+(?:-[a-zA-Z0-9]+)*\b'
                 semua_kata = re.findall(pola_kata, raw_text.lower())
                 
                 try:
                     import nltk
-                    jml_kalimat = len(nltk.sent_tokenize(raw_text[:80000]))
+                    jml_kalimat = len(nltk.sent_tokenize(raw_text[:20000]))
                 except:
-                    jml_kalimat = raw_text[:80000].count('.') + raw_text[:80000].count('!') + raw_text[:80000].count('?')
+                    jml_kalimat = raw_text[:20000].count('.') + raw_text[:20000].count('!') + raw_text[:20000].count('?')
                 
                 st.session_state.local_files[file.name] = {
                     'text': raw_text, 
@@ -1873,10 +1939,6 @@ with tab_induk_voice:
                             if f not in st.session_state.sub_corpora[target_grup_v]: st.session_state.sub_corpora[target_grup_v].append(f)
                         st.toast(f"Berhasil update grup {target_grup_v}!")
                         st.rerun()
-
         render_workspace_voice(file_names_voice)
-        
     else:
         st.info("👋 Silakan upload file rekaman suara untuk mendapatkan transkrip dan analisisnya.")
-
-
