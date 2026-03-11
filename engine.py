@@ -14,10 +14,10 @@ stanza.download('id', processors='tokenize,pos,lemma,depparse', verbose=True)
 # 2. Download Model SpaCy (Bahasa Inggris & Lainnya)
 # Kamu bisa menambahkan bahasa lain seperti 'fr_core_news_lg' di sini jika perlu
 print("\n[2/3] Mendownload Model SpaCy (Bahasa Inggris dll)...")
-spacy.cli.download("en_core_web_lg")
-spacy.cli.download("es_core_news_lg") 
-spacy.cli.download("fr_core_news_lg")
-spacy.cli.download("de_core_news_lg")
+spacy.cli.download("en_core_web_sm")
+spacy.cli.download("es_core_news_sm") 
+spacy.cli.download("fr_core_news_sm")
+spacy.cli.download("de_core_news_sm")
 
 # 3. Download Data Kamus NLTK
 print("\n[3/3] Mendownload Dependensi NLTK (WordNet, VADER, dll)...")
@@ -30,4 +30,5 @@ nltk.download('vader_lexicon')
 print("\n==================================================")
 print("✅ SEMUA MODEL BERHASIL DIDOWNLOAD!")
 print("Sekarang kamu bisa menjalankan aplikasi Streamlit.")
+
 print("==================================================")
