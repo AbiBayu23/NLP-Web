@@ -27,7 +27,6 @@ import pandas as pd
 from bs4 import BeautifulSoup
 from collections import Counter
 import html
-from gensim.models import Word2Vec
 import numpy as np
 
 from ai_engine import (
@@ -1942,3 +1941,4 @@ with tab_induk_voice:
         render_workspace_voice(file_names_voice)
     else:
         st.info("👋 Silakan upload file rekaman suara untuk mendapatkan transkrip dan analisisnya.")
+
