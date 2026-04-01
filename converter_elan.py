@@ -2,7 +2,6 @@ import pandas as pd
 from bs4 import BeautifulSoup
 import re
 
-# Fungsi natural_sort_key dan clean_duplicated_start dibiarkan SAMA PERSIS
 def natural_sort_key(s):
     return [int(text) if text.isdigit() else text.lower() for text in re.split('([0-9]+)', s)]
 
@@ -20,9 +19,7 @@ def clean_duplicated_start(source, target):
         if cleaned: return cleaned   
     return t
 
-# Fungsi yang disesuaikan untuk Streamlit
 def process_eaf_untuk_streamlit(uploaded_file):
-    # MEMBACA FILE DARI MEMORI STREAMLIT
     content = uploaded_file.getvalue().decode("utf-8")
     soup = BeautifulSoup(content, 'xml')
 
@@ -71,6 +68,12 @@ def process_eaf_untuk_streamlit(uploaded_file):
 
         target_text = " ".join(filtered_targets).strip()
         target_text = clean_duplicated_start(full_source, target_text)
+        
+        # --- Modifikasi Penambahan Titik ---
+        if target_text and not target_text.endswith(('.', '?', '!')):
+            target_text += '.'
+        # -----------------------------------
+
         catatan_text = " | ".join(catatan_texts).strip()
 
         if target_text or catatan_text:
@@ -83,7 +86,6 @@ def process_eaf_untuk_streamlit(uploaded_file):
 
     rows.sort(key=lambda x: natural_sort_key(x['ID_Unit']))
 
-    # MENGEMBALIKAN DATAFRAME, BUKAN SAVE KE EXCEL
     if rows:
         return pd.DataFrame(rows)
     else:
