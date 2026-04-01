@@ -8,7 +8,6 @@ import streamlit as st
 import spacy
 from spacy.language import Language
 import re
-import google.generativeai as genai
 
 # --- KAMUS POS AKADEMIS INDONESIA ---
 KAMUS_ADP = {"di", "ke", "dari", "pada", "dalam", "dengan", "bagi", "untuk", "kepada", "daripada", "oleh", "tentang", "seperti", "beserta", "secara", "melalui", "menuju", "antara", "demi", "hingga", "sampai", "sebagai"}
@@ -23,8 +22,8 @@ KAMUS_VERB_AKADEMIS = {"menggunakan", "mendukung", "memastikan", "menyaksikan", 
 KAMUS_ADJ_AKADEMIS = {"multilingual", "utama", "global", "presisi", "manual", "modern", "konfirmatori", "krusial", "penting", "baru", "lama", "baik", "buruk", "tinggi", "rendah", "besar", "kecil", "signifikan", "otomatis", "statis", "dinamis", "akurat", "efektif", "efisien", "relevan", "spesifik", "umum", "kompleks", "sederhana"}
 
 SPACY_MODELS = {
-    'id': 'stanza', 'en': 'en_core_web_sm', 'es': 'es_core_news_sm',
-    'fr': 'fr_core_news_sm', 'de': 'de_core_news_sm'
+    'id': 'stanza', 'en': 'en_core_web_lg', 'es': 'es_core_news_lg',
+    'fr': 'fr_core_news_lg', 'de': 'de_core_news_lg'
 }
 
 # --- PIPELINE KUSTOM ---
@@ -58,45 +57,31 @@ def koreksi_pos_id(doc):
     return doc
 
 # --- FUNGSI LOAD NLP ---
-import spacy
-import stanza
-import spacy_stanza
-
 @st.cache_resource
 def load_ai_model(lang_code):
     model_name = SPACY_MODELS.get(lang_code, 'en_core_web_sm') 
     
-    # --- LOGIKA UNTUK BAHASA INDONESIA (STANZA) ---
     if model_name == 'stanza':
-        try:
-            # Coba load pipeline
-            nlp_model = spacy_stanza.load_pipeline('id', processors='tokenize,pos,lemma,depparse')
-        except Exception:
-            # Jika gagal (belum ada di server), download dulu secara otomatis
-            with st.spinner("📥 Sedang mengunduh model bahasa Indonesia (Stanza)..."):
-                stanza.download('id')
-            nlp_model = spacy_stanza.load_pipeline('id', processors='tokenize,pos,lemma,depparse')
-            
+        import spacy_stanza
+        # Pastikan tidak ada perintah download() di sini
+        nlp_model = spacy_stanza.load_pipeline('id', processors='tokenize,pos,lemma,depparse')
         if "koreksi_pos_id" not in nlp_model.pipe_names:
             nlp_model.add_pipe("koreksi_pos_id", last=True)
         return nlp_model
             
-    # --- LOGIKA UNTUK BAHASA INGGRIS / LAINNYA (SPACY) ---
+    # Untuk SpaCy LG
     try:
         nlp_model = spacy.load(model_name)
     except Exception:
-        # Jika model spacy belum ada, unduh via spacy cli
-        with st.spinner(f"📥 Sedang mengunduh model {model_name}..."):
-            spacy.cli.download(model_name)
-        nlp_model = spacy.load(model_name)
+        # Fallback ke model dasar jika LG benar-benar tidak ada
+        from spacy.lang.en import English
+        nlp_model = English()
+        nlp_model.add_pipe("sentencizer")
         
-    # Tambahkan komponen tambahan
     if "merge_hyphens" not in nlp_model.pipe_names:
-        if "tagger" in nlp_model.pipe_names:
-            nlp_model.add_pipe("merge_hyphens", before="tagger")
-        else:
-            nlp_model.add_pipe("merge_hyphens")
-            
+        # Tambahkan pipeline kustom merger
+        nlp_model.add_pipe("merge_hyphens", first=True)
+        
     return nlp_model
 
 # --- FUNGSI LOAD AUDIO WHISPER ---
@@ -126,23 +111,3 @@ def dapatkan_sinonim(query, lang_code):
     return sinonim_set
 
 # --- FUNGSI LOAD GEMINI (UNTUK COMPARE INSIGHT) ---
-@st.cache_data(show_spinner=False)
-def hasilkan_insight_gemini(jaccard_sim, cosine_sim, top3_a, top3_b):
-    genai.configure(api_key="AIzaSyBPPUO2zNYmsFgabE9Cd3jhBKQSmpZzHes")
-    available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-    target_model_name = next((m for m in available_models if 'gemini-1.5' in m), None) or next((m for m in available_models if 'gemini' in m), available_models[0])
-    
-    model_ai = genai.GenerativeModel(target_model_name)
-    
-    prompt_instruksi = f"""
-    Kamu adalah analis linguistik profesional. Berikan satu paragraf kesimpulan analitis yang mendalam, natural, dan tidak seperti robot.
-    Data perbandingan:
-    1. Kemiripan Makna (Cosine): {cosine_sim*100:.1f}%
-    2. Kemiripan Kosakata (Jaccard): {jaccard_sim*100:.1f}%
-    3. Dok A fokus: {', '.join(top3_a)}
-    4. Dok B fokus: {', '.join(top3_b)}
-    """
-    respons_genai = model_ai.generate_content(prompt_instruksi)
-
-    return respons_genai.text, target_model_name.replace('models/', '')
-
